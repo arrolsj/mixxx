@@ -65,6 +65,9 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
             KeyboardEventFilter* keyboard) override;
 
     TreeItemModel* sidebarModel() const override;
+    int deviceCount() const;
+    bool isDeviceScanRunning() const;
+    void scanDevices();
 
   public slots:
     void activate() override;
@@ -72,6 +75,10 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     void refreshLibraryModels();
     void onRekordboxDevicesFound();
     void onTracksFound();
+
+  signals:
+    void devicesChanged();
+    void deviceScanStateChanged();
 
   private slots:
     void htmlLinkClicked(const QUrl& link);
@@ -89,6 +96,7 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     QFutureWatcher<QString> m_tracksFutureWatcher;
     QFuture<QString> m_tracksFuture;
     QString m_title;
+    bool m_featureLoadingRequested{false};
 
     QSharedPointer<BaseTrackCache> m_trackSource;
 };

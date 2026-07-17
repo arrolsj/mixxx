@@ -73,7 +73,8 @@ Library::Library(
           m_pMixxxLibraryFeature(nullptr),
           m_pPlaylistFeature(nullptr),
           m_pCrateFeature(nullptr),
-          m_pAnalysisFeature(nullptr) {
+          m_pAnalysisFeature(nullptr),
+          m_pRekordboxFeature(nullptr) {
     qRegisterMetaType<LibraryRemovalType>("LibraryRemovalType");
 
     m_pKeyNotation.reset(
@@ -199,7 +200,16 @@ Library::Library(
     // periodically. Not ideal performance wise.
     if (m_pConfig->getValue(
                 ConfigKey(kConfigGroup, "ShowRekordboxLibrary"), true)) {
-        addFeature(new RekordboxFeature(this, m_pConfig));
+        m_pRekordboxFeature = new RekordboxFeature(this, m_pConfig);
+        connect(m_pRekordboxFeature,
+                &RekordboxFeature::devicesChanged,
+                this,
+                &Library::rekordboxMediaStatusChanged);
+        connect(m_pRekordboxFeature,
+                &RekordboxFeature::deviceScanStateChanged,
+                this,
+                &Library::rekordboxMediaStatusChanged);
+        addFeature(m_pRekordboxFeature);
     }
 
     if (m_pConfig->getValue(
@@ -766,4 +776,18 @@ LibraryTableModel* Library::trackTableModel() const {
     }
 
     return m_pMixxxLibraryFeature->trackTableModel();
+}
+
+void Library::scanRekordboxDevices() {
+    if (m_pRekordboxFeature) {
+        m_pRekordboxFeature->scanDevices();
+    }
+}
+
+int Library::rekordboxDeviceCount() const {
+    return m_pRekordboxFeature ? m_pRekordboxFeature->deviceCount() : 0;
+}
+
+bool Library::isRekordboxDeviceScanRunning() const {
+    return m_pRekordboxFeature && m_pRekordboxFeature->isDeviceScanRunning();
 }

@@ -2,7 +2,8 @@
 #include <QIdentityProxyModel>
 #include <QQmlEngine>
 
-class LibraryTableModel;
+class QAbstractItemModel;
+class TrackModel;
 
 namespace mixxx {
 namespace qml {
@@ -18,17 +19,24 @@ class QmlLibraryTrackListModel : public QIdentityProxyModel {
         ArtistRole,
         AlbumRole,
         AlbumArtistRole,
+        BpmRole,
+        KeyRole,
+        DurationRole,
         FileUrlRole,
     };
     Q_ENUM(Roles);
 
-    QmlLibraryTrackListModel(LibraryTableModel* pModel, QObject* pParent = nullptr);
+    QmlLibraryTrackListModel(QAbstractItemModel* pModel, QObject* pParent = nullptr);
     ~QmlLibraryTrackListModel() = default;
 
     QVariant data(const QModelIndex& index, int role) const override;
     int columnCount(const QModelIndex& index = QModelIndex()) const override;
     QHash<int, QByteArray> roleNames() const override;
     Q_INVOKABLE QVariant get(int row) const;
+    bool setTrackModel(QAbstractItemModel* pModel);
+
+  private:
+    TrackModel* m_pTrackModel;
 };
 
 } // namespace qml

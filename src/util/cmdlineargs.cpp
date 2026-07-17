@@ -9,6 +9,7 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QStyleFactory>
@@ -278,6 +279,13 @@ bool CmdlineArgs::parse(const QStringList& arguments, CmdlineArgs::ParseMode mod
                                       "Loads experimental QML GUI instead of legacy QWidget skin")
                             : QString());
     parser.addOption(qml);
+
+    const QCommandLineOption qmlEntry(QStringLiteral("qml-entry"),
+            forUserFeedback ? QCoreApplication::translate("CmdlineArgs",
+                                      "Loads an absolute local QML entry file. Requires --qml.")
+                            : QString(),
+            QStringLiteral("absolute-main.qml"));
+    parser.addOption(qmlEntry);
 #endif
     const QCommandLineOption safeMode(QStringLiteral("safe-mode"),
             forUserFeedback ? QCoreApplication::translate("CmdlineArgs",
@@ -441,6 +449,31 @@ bool CmdlineArgs::parse(const QStringList& arguments, CmdlineArgs::ParseMode mod
     m_developer = parser.isSet(developer);
 #ifdef MIXXX_USE_QML
     m_qml = parser.isSet(qml);
+    m_qmlEntryPath.clear();
+    if (parser.isSet(qmlEntry)) {
+        if (!m_qml) {
+            fputs("--qml-entry requires --qml.\n", stderr);
+            return false;
+        }
+
+        const QFileInfo qmlEntryFile(parser.value(qmlEntry));
+        if (!qmlEntryFile.isAbsolute()) {
+            fputs("--qml-entry must be an absolute local path.\n", stderr);
+            return false;
+        }
+        if (!qmlEntryFile.exists() || !qmlEntryFile.isFile() ||
+                !qmlEntryFile.isReadable()) {
+            fprintf(stderr,
+                    "--qml-entry does not name a readable file: %s\n",
+                    qPrintable(qmlEntryFile.absoluteFilePath()));
+            return false;
+        }
+        if (qmlEntryFile.suffix().compare(QLatin1String("qml"), Qt::CaseInsensitive) != 0) {
+            fputs("--qml-entry must name a .qml file.\n", stderr);
+            return false;
+        }
+        m_qmlEntryPath = qmlEntryFile.canonicalFilePath();
+    }
 #endif
     m_safeMode = parser.isSet(safeMode) || parser.isSet(safeModeDeprecated);
     m_debugAssertBreak = parser.isSet(debugAssertBreak) || parser.isSet(debugAssertBreakDeprecated);

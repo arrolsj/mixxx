@@ -1437,6 +1437,24 @@ TreeItemModel* RekordboxFeature::sidebarModel() const {
     return m_pSidebarModel;
 }
 
+int RekordboxFeature::deviceCount() const {
+    const TreeItem* pRoot = m_pSidebarModel->getRootItem();
+    return pRoot ? pRoot->childRows() : 0;
+}
+
+bool RekordboxFeature::isDeviceScanRunning() const {
+    return m_devicesFutureWatcher.isRunning();
+}
+
+void RekordboxFeature::scanDevices() {
+    if (m_devicesFutureWatcher.isRunning()) {
+        return;
+    }
+    m_devicesFuture = QtConcurrent::run(findRekordboxDevices);
+    m_devicesFutureWatcher.setFuture(m_devicesFuture);
+    emit deviceScanStateChanged();
+}
+
 QString RekordboxFeature::formatRootViewHtml() const {
     QString title = tr("Rekordbox");
     QString summary = tr(
@@ -1487,10 +1505,10 @@ void RekordboxFeature::activate() {
     qDebug() << "RekordboxFeature::activate()";
 
     // Let a worker thread do the XML parsing
-    m_devicesFuture = QtConcurrent::run(findRekordboxDevices);
-    m_devicesFutureWatcher.setFuture(m_devicesFuture);
+    scanDevices();
     m_title = tr("(loading) Rekordbox");
     //calls a slot in the sidebar model such that 'Rekordbox (isLoading)' is displayed.
+    m_featureLoadingRequested = true;
     emit featureIsLoading(this, true);
 
     emit enableCoverArtDisplay(true);
@@ -1611,9 +1629,16 @@ void RekordboxFeature::onRekordboxDevicesFound() {
         }
     }
 
-    // calls a slot in the sidebarmodel such that 'isLoading' is removed from the feature title.
+    emit devicesChanged();
+    emit deviceScanStateChanged();
+
+    // Calls a slot in the sidebar model such that isLoading is removed from
+    // the feature title. A QML status-only scan does not set feature loading.
     m_title = tr("Rekordbox");
-    emit featureLoadingFinished(this);
+    if (m_featureLoadingRequested) {
+        m_featureLoadingRequested = false;
+        emit featureLoadingFinished(this);
+    }
 }
 
 void RekordboxFeature::onTracksFound() {

@@ -2246,6 +2246,15 @@ if(BUILD_TESTING)
     )
   endif()
 
+  if(QML)
+    list(
+      APPEND
+      src-mixxx-test
+      src/test/qmlcontrollerstatus_test.cpp
+      src/test/qmllibrarytracklistmodel_test.cpp
+    )
+  endif()
+
   add_executable(mixxx-test ${src-mixxx-test})
 
   if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
@@ -2269,6 +2278,52 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     TEST_LIST testsuite
   )
+
+  if(QML)
+    add_test(
+      NAME QmlEntryCli.AcceptsAbsolutePath
+      COMMAND $<TARGET_FILE:mixxx>
+        --qml
+        --qml-entry "${CMAKE_CURRENT_SOURCE_DIR}/res/qml/main.qml"
+        --help
+    )
+    set_tests_properties(QmlEntryCli.AcceptsAbsolutePath PROPERTIES
+      PASS_REGULAR_EXPRESSION "qml-entry"
+      LABELS "qml"
+    )
+
+    add_test(
+      NAME QmlEntryCli.RequiresQml
+      COMMAND $<TARGET_FILE:mixxx>
+        --qml-entry "${CMAKE_CURRENT_SOURCE_DIR}/res/qml/main.qml"
+    )
+    set_tests_properties(QmlEntryCli.RequiresQml PROPERTIES
+      PASS_REGULAR_EXPRESSION "--qml-entry requires --qml"
+      LABELS "qml"
+    )
+
+    add_test(
+      NAME QmlEntryCli.RejectsRelativePath
+      COMMAND $<TARGET_FILE:mixxx>
+        --qml
+        --qml-entry "res/qml/main.qml"
+    )
+    set_tests_properties(QmlEntryCli.RejectsRelativePath PROPERTIES
+      PASS_REGULAR_EXPRESSION "--qml-entry must be an absolute local path"
+      LABELS "qml"
+    )
+
+    add_test(
+      NAME QmlEntryCli.RejectsMissingFile
+      COMMAND $<TARGET_FILE:mixxx>
+        --qml
+        --qml-entry "${CMAKE_CURRENT_BINARY_DIR}/missing-lastcue-main.qml"
+    )
+    set_tests_properties(QmlEntryCli.RejectsMissingFile PROPERTIES
+      PASS_REGULAR_EXPRESSION "--qml-entry does not name a readable file"
+      LABELS "qml"
+    )
+  endif()
 
   if (NOT WIN32)
     # Default to offscreen rendering during tests.
@@ -2955,11 +3010,13 @@ if(QML)
     src/qml/qmlcuesmodel.cpp
     src/qml/qmlcontrolproxy.cpp
     src/qml/qmlconfigproxy.cpp
+    src/qml/qmlcontrollerstatus.cpp
     src/qml/qmldlgpreferencesproxy.cpp
     src/qml/qmleffectmanifestparametersmodel.cpp
     src/qml/qmleffectsmanagerproxy.cpp
     src/qml/qmleffectslotproxy.cpp
     src/qml/qmllibraryproxy.cpp
+    src/qml/qmllibrarysourcemodel.cpp
     src/qml/qmllibrarytracklistmodel.cpp
     src/qml/qmlplayermanagerproxy.cpp
     src/qml/qmlplayerproxy.cpp

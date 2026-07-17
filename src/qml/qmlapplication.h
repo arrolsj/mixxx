@@ -14,7 +14,8 @@ class QmlApplication : public QObject {
   public:
     QmlApplication(
             QApplication* app,
-            std::shared_ptr<CoreServices> pCoreServices);
+            std::shared_ptr<CoreServices> pCoreServices,
+            const QString& mainFilePath = QString());
     ~QmlApplication() override;
 
   public slots:

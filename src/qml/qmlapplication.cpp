@@ -7,6 +7,7 @@
 #include "moc_qmlapplication.cpp"
 #include "qml/asyncimageprovider.h"
 #include "qml/qmlconfigproxy.h"
+#include "qml/qmlcontrollerstatus.h"
 #include "qml/qmlcontrolproxy.h"
 #include "qml/qmldlgpreferencesproxy.h"
 #include "qml/qmleffectmanifestparametersmodel.h"
@@ -41,9 +42,12 @@ namespace qml {
 
 QmlApplication::QmlApplication(
         QApplication* app,
-        std::shared_ptr<CoreServices> pCoreServices)
+        std::shared_ptr<CoreServices> pCoreServices,
+        const QString& mainFilePath)
         : m_pCoreServices(pCoreServices),
-          m_mainFilePath(pCoreServices->getSettings()->getResourcePath() + kMainQmlFileName),
+          m_mainFilePath(mainFilePath.isEmpty()
+                          ? pCoreServices->getSettings()->getResourcePath() + kMainQmlFileName
+                          : mainFilePath),
           m_pAppEngine(nullptr),
           m_autoReload() {
     m_pCoreServices->initialize(app);
@@ -77,6 +81,8 @@ QmlApplication::QmlApplication(
     QmlEffectsManagerProxy::registerEffectsManager(pCoreServices->getEffectsManager());
     QmlPlayerManagerProxy::registerPlayerManager(pCoreServices->getPlayerManager());
     QmlConfigProxy::registerUserSettings(pCoreServices->getSettings());
+    QmlControllerStatus::registerControllerManager(
+            pCoreServices->getControllerManager().get());
     QmlLibraryProxy::registerLibrary(pCoreServices->getLibrary());
 
     loadQml(m_mainFilePath);
@@ -96,6 +102,7 @@ QmlApplication::~QmlApplication() {
     QmlEffectsManagerProxy::registerEffectsManager(nullptr);
     QmlPlayerManagerProxy::registerPlayerManager(nullptr);
     QmlConfigProxy::registerUserSettings(nullptr);
+    QmlControllerStatus::registerControllerManager(nullptr);
     QmlLibraryProxy::registerLibrary(nullptr);
     QmlDlgPreferencesProxy::s_pInstance->deleteLater();
 }

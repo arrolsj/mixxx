@@ -59,7 +59,8 @@ int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
     int exitCode;
 #ifdef MIXXX_USE_QML
     if (args.isQml()) {
-        mixxx::qml::QmlApplication qmlApplication(pApp, pCoreServices);
+        mixxx::qml::QmlApplication qmlApplication(
+                pApp, pCoreServices, args.getQmlEntryPath());
         exitCode = pApp->exec();
     } else
 #endif

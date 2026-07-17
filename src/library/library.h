@@ -27,6 +27,7 @@ class MixxxLibraryFeature;
 class PlayerManager;
 class PlaylistFeature;
 class RecordingManager;
+class RekordboxFeature;
 class SidebarModel;
 class TrackCollectionManager;
 class WSearchLineEdit;
@@ -75,6 +76,12 @@ class Library: public QObject {
 
     /// Needed for exposing models to QML
     LibraryTableModel* trackTableModel() const;
+    SidebarModel* sidebarModel() const {
+        return m_pSidebarModel;
+    }
+    void scanRekordboxDevices();
+    int rekordboxDeviceCount() const;
+    bool isRekordboxDeviceScanRunning() const;
 
     bool isTrackIdInCurrentLibraryView(const TrackId& trackId);
 
@@ -149,6 +156,7 @@ class Library: public QObject {
     void setSelectedClick(bool enable);
 
     void onTrackAnalyzerProgress(TrackId trackId, AnalyzerProgress analyzerProgress);
+    void rekordboxMediaStatusChanged();
 
   private slots:
       void onPlayerManagerTrackAnalyzerProgress(TrackId trackId, AnalyzerProgress analyzerProgress);
@@ -174,6 +182,7 @@ class Library: public QObject {
     CrateFeature* m_pCrateFeature;
     AnalysisFeature* m_pAnalysisFeature;
     BrowseFeature* m_pBrowseFeature;
+    RekordboxFeature* m_pRekordboxFeature;
     QFont m_trackTableFont;
     int m_iTrackTableRowHeight;
     bool m_editMetadataSelectedClick;
