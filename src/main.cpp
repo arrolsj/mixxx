@@ -24,6 +24,7 @@
 #include "nativeeventhandlerwin.h"
 #endif
 #include "sources/soundsourceproxy.h"
+#include "soundio/soundmanager.h"
 #include "util/cmdlineargs.h"
 #include "util/console.h"
 #include "util/logging.h"
@@ -59,6 +60,28 @@ int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
     int exitCode;
 #ifdef MIXXX_USE_QML
     if (args.isQml()) {
+        pCoreServices->initialize(pApp);
+
+        // Some mappings switch their hardware into its full DJ/audio mode
+        // during script initialization. Wait for that work to complete before
+        // SoundManager opens the configured device, otherwise drivers such as
+        // the DDJ-SX3 ASIO driver may be opened while the device is changing
+        // modes.
+        const auto pControllerManager = pCoreServices->getControllerManager();
+        if (!pControllerManager->setUpDevicesBlocking()) {
+            qCritical() << "Failed to set up controllers on the controller thread";
+            return kFatalErrorOnStartupExitCode;
+        }
+
+        const auto pSoundManager = pCoreServices->getSoundManager();
+        const SoundDeviceStatus soundStatus = pSoundManager->setupDevices();
+        if (soundStatus != SoundDeviceStatus::Ok) {
+            qCritical() << "Error setting up sound devices:"
+                        << static_cast<int>(soundStatus)
+                        << pSoundManager->getLastErrorMessage(soundStatus);
+            return static_cast<int>(soundStatus);
+        }
+
         mixxx::qml::QmlApplication qmlApplication(
                 pApp, pCoreServices, args.getQmlEntryPath());
         pApp->setQuitOnLastWindowClosed(true);

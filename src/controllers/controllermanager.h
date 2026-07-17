@@ -41,6 +41,9 @@ class ControllerManager : public QObject {
 
     /// Prevent other parts of Mixxx from having to manually connect to our slots
     void setUpDevices() { emit requestSetUpDevices(); };
+    /// Run the startup controller setup pass on the controller thread and wait
+    /// until mapping initialization and device-open attempts have completed.
+    bool setUpDevicesBlocking();
 
     static QList<QString> getMappingPaths(UserSettingsPointer pConfig);
 

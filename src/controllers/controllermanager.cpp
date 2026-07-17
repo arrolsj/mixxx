@@ -1,5 +1,6 @@
 #include "controllers/controllermanager.h"
 
+#include <QMetaObject>
 #include <QSet>
 #include <QThread>
 
@@ -238,6 +239,22 @@ QList<Controller*> ControllerManager::getControllerList(bool bOutputDevices, boo
 
 QString ControllerManager::getConfiguredMappingFileForDevice(const QString& name) {
     return m_pConfig->getValueString(ConfigKey(kSettingsGroup, sanitizeDeviceName(name)));
+}
+
+bool ControllerManager::setUpDevicesBlocking() {
+    if (QThread::currentThread() == thread()) {
+        slotSetUpDevices();
+        return true;
+    }
+    if (!m_pThread || !m_pThread->isRunning()) {
+        return false;
+    }
+    return QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                slotSetUpDevices();
+            },
+            Qt::BlockingQueuedConnection);
 }
 
 void ControllerManager::slotSetUpDevices() {

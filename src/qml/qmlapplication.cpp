@@ -50,13 +50,7 @@ QmlApplication::QmlApplication(
                           : mainFilePath),
           m_pAppEngine(nullptr),
           m_autoReload() {
-    m_pCoreServices->initialize(app);
-    SoundDeviceStatus result = m_pCoreServices->getSoundManager()->setupDevices();
-    if (result != SoundDeviceStatus::Ok) {
-        const int reInt = static_cast<int>(result);
-        qCritical() << "Error setting up sound devices:" << reInt;
-        exit(reInt);
-    }
+    Q_UNUSED(app);
 
     // FIXME: DlgPreferences has some initialization logic that must be executed
     // before the GUI is shown, at least for the effects system.
@@ -86,8 +80,6 @@ QmlApplication::QmlApplication(
     QmlLibraryProxy::registerLibrary(pCoreServices->getLibrary());
 
     loadQml(m_mainFilePath);
-
-    pCoreServices->getControllerManager()->setUpDevices();
 
     connect(&m_autoReload,
             &QmlAutoReload::triggered,
