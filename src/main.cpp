@@ -61,6 +61,13 @@ int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
     if (args.isQml()) {
         mixxx::qml::QmlApplication qmlApplication(
                 pApp, pCoreServices, args.getQmlEntryPath());
+        pApp->setQuitOnLastWindowClosed(true);
+        // QML does not create its main window until CoreServices has finished
+        // initializing. Connecting this earlier makes closing a startup dialog
+        // (for example the initial library-directory chooser) queue an
+        // application quit before the QML window exists.
+        QObject::connect(
+                pApp, &MixxxApplication::lastWindowClosed, pApp, &MixxxApplication::quit);
         exitCode = pApp->exec();
     } else
 #endif
@@ -231,6 +238,16 @@ int main(int argc, char * argv[]) {
 
     MixxxApplication app(argc, argv);
 
+#ifdef MIXXX_USE_QML
+    // CoreServices may open and close transient QWidget dialogs before the QML
+    // engine creates its main window. Keep QApplication from queuing a quit
+    // during that initialization window; runMixxx restores the default after
+    // QmlApplication has loaded its root object.
+    if (args.isQml()) {
+        app.setQuitOnLastWindowClosed(false);
+    }
+#endif
+
 #if defined(Q_OS_WIN)
     // The Mixxx style is based on Qt's WindowsVista style
     QApplication::setStyle("windowsvista");
@@ -283,8 +300,17 @@ int main(int argc, char * argv[]) {
     }
 #endif
 
-    // When the last window is closed, terminate the Qt event loop.
-    QObject::connect(&app, &MixxxApplication::lastWindowClosed, &app, &MixxxApplication::quit);
+    // The QML startup path connects this after its main window has been loaded.
+    // During QML initialization there may only be a transient startup dialog;
+    // closing it must not terminate the application before the QML window exists.
+#ifdef MIXXX_USE_QML
+    if (!args.isQml()) {
+#endif
+        QObject::connect(
+                &app, &MixxxApplication::lastWindowClosed, &app, &MixxxApplication::quit);
+#ifdef MIXXX_USE_QML
+    }
+#endif
 
     int exitCode = runMixxx(&app, args);
 
