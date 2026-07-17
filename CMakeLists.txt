@@ -2415,6 +2415,9 @@ add_custom_target(mixxx-gitinfo
 add_library(mixxx-gitinfostore STATIC EXCLUDE_FROM_ALL
     src/util/gitinfostore.cpp
 )
+set_source_files_properties(src/util/gitinfostore.cpp PROPERTIES
+  OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/src/gitinfo.h"
+)
 target_include_directories(mixxx-gitinfostore PUBLIC src ${CMAKE_BINARY_DIR}/src)
 add_dependencies(mixxx-gitinfostore mixxx-gitinfo)
 
