@@ -8,6 +8,7 @@ namespace {
 const QHash<int, QByteArray> kRoleNames = {
         {QmlBeatsModel::FramePositionRole, "framePosition"},
         {QmlBeatsModel::IsDownbeatRole, "isDownbeat"},
+        {QmlBeatsModel::BeatNumberRole, "beatNumber"},
 };
 }
 
@@ -53,10 +54,15 @@ QVariant QmlBeatsModel::data(const QModelIndex& index, int role) const {
     switch (role) {
     case QmlBeatsModel::FramePositionRole:
         return (*it).value();
+    case QmlBeatsModel::BeatNumberRole:
     case QmlBeatsModel::IsDownbeatRole: {
         constexpr int kBeatsPerBar = 4;
         const int beatOffset = m_firstBeatOffset + index.row();
-        return ((beatOffset % kBeatsPerBar) + kBeatsPerBar) % kBeatsPerBar == 0;
+        const int beatNumber =
+                ((beatOffset % kBeatsPerBar) + kBeatsPerBar) % kBeatsPerBar + 1;
+        return role == QmlBeatsModel::BeatNumberRole
+                ? QVariant(beatNumber)
+                : QVariant(beatNumber == 1);
     }
     default:
         return QVariant();

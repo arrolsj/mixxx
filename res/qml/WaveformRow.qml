@@ -61,62 +61,6 @@ Item {
         }
 
         Mixxx.ControlProxy {
-            id: totalGainControl
-
-            group: root.group
-            key: "total_gain"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterWaveformEnableControl
-
-            group: root.group
-            key: "filterWaveformEnable"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterHighControl
-
-            group: "[EqualizerRack1_" + root.group + "_Effect1]"
-            key: "parameter3"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterHighKillControl
-
-            group: "[EqualizerRack1_" + root.group + "_Effect1]"
-            key: "button_parameter3"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterMidControl
-
-            group: "[EqualizerRack1_" + root.group + "_Effect1]"
-            key: "parameter2"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterMidKillControl
-
-            group: "[EqualizerRack1_" + root.group + "_Effect1]"
-            key: "button_parameter2"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterLowControl
-
-            group: "[EqualizerRack1_" + root.group + "_Effect1]"
-            key: "parameter1"
-        }
-
-        Mixxx.ControlProxy {
-            id: filterLowKillControl
-
-            group: "[EqualizerRack1_" + root.group + "_Effect1]"
-            key: "button_parameter1"
-        }
-
-        Mixxx.ControlProxy {
             id: introStartPosition
 
             group: root.group
@@ -208,13 +152,6 @@ Item {
             highColor: "#0000FF"
             midColor: "#00FF00"
             lowColor: "#FF0000"
-            highGain: filterWaveformEnableControl.value
-                    ? (filterHighKillControl.value ? 0 : filterHighControl.value) : 1
-            midGain: filterWaveformEnableControl.value
-                    ? (filterMidKillControl.value ? 0 : filterMidControl.value) : 1
-            lowGain: filterWaveformEnableControl.value
-                    ? (filterLowKillControl.value ? 0 : filterLowControl.value) : 1
-            allGain: totalGainControl.value
             visible: root.deckPlayer.isLoaded
         }
 
@@ -304,7 +241,8 @@ Item {
                     id: beatLine
 
                     required property real framePosition
-                    required property bool isDownbeat
+                    required property int beatNumber
+                    readonly property bool isDownbeat: beatNumber === 1
 
                     property real physicalPixel: 1 / Screen.devicePixelRatio
                     property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * waveform.width

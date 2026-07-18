@@ -13,6 +13,7 @@ class QmlBeatsModel : public QAbstractListModel {
     enum Roles {
         FramePositionRole = Qt::UserRole + 1,
         IsDownbeatRole,
+        BeatNumberRole,
     };
     Q_ENUM(Roles)
 

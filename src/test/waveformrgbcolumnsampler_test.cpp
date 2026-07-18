@@ -36,7 +36,6 @@ void expectColumnEqual(
 const WaveformRgbColorF kLowColor{1.0f, 0.0f, 0.0f};
 const WaveformRgbColorF kMidColor{0.0f, 1.0f, 0.0f};
 const WaveformRgbColorF kHighColor{0.0f, 0.0f, 1.0f};
-const WaveformRgbGains kUnityGains{};
 
 TEST(WaveformRgbColumnSamplerTest,
         OnePhysicalTrackPixelIsPureTranslationAtEveryZoomAndDpr) {
@@ -71,16 +70,14 @@ TEST(WaveformRgbColumnSamplerTest,
                     beforeMetrics,
                     kLowColor,
                     kMidColor,
-                    kHighColor,
-                    kUnityGains);
+                    kHighColor);
             const auto after = sampleWaveformRgbColumns(data.data(),
                     static_cast<int>(data.size()),
                     static_cast<int>(data.size()),
                     afterMetrics,
                     kLowColor,
                     kMidColor,
-                    kHighColor,
-                    kUnityGains);
+                    kHighColor);
             ASSERT_EQ(before.size(), after.size());
             for (std::size_t index = 0; index + 1 < before.size(); ++index) {
                 expectColumnEqual(before[index + 1], after[index]);
@@ -129,24 +126,21 @@ TEST(WaveformRgbColumnSamplerTest,
             baseMetrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     const auto inside = sampleWaveformRgbColumns(data.data(),
             static_cast<int>(data.size()),
             static_cast<int>(data.size()),
             insideMetrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     const auto crossed = sampleWaveformRgbColumns(data.data(),
             static_cast<int>(data.size()),
             static_cast<int>(data.size()),
             crossedMetrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     ASSERT_EQ(base.size(), inside.size());
     ASSERT_EQ(base.size(), crossed.size());
     for (std::size_t index = 0; index < base.size(); ++index) {
@@ -174,8 +168,7 @@ TEST(WaveformRgbColumnSamplerTest, AggregatesSeparatedBandAndChannelPeaks) {
             metrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     ASSERT_EQ(1U, columns.size());
     EXPECT_FLOAT_EQ(50.0f, columns[0].leftAmplitude);
     EXPECT_FLOAT_EQ(100.0f, columns[0].rightAmplitude);
@@ -195,8 +188,7 @@ TEST(WaveformRgbColumnSamplerTest, OutputIsBoundedByPhysicalViewport) {
             metrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     EXPECT_EQ(35, metrics.physicalWidth);
     EXPECT_EQ(static_cast<std::size_t>(metrics.physicalWidth), columns.size());
 }
@@ -220,16 +212,14 @@ TEST(WaveformRgbColumnSamplerTest, NeverReadsBeyondCompletedStereoPrefix) {
             completedMetrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     const auto incomplete = sampleWaveformRgbColumns(data.data(),
             static_cast<int>(data.size()),
             kCompletedDataElements,
             incompleteMetrics,
             kLowColor,
             kMidColor,
-            kHighColor,
-            kUnityGains);
+            kHighColor);
     ASSERT_EQ(1U, completed.size());
     ASSERT_EQ(1U, incomplete.size());
     EXPECT_FLOAT_EQ(200.0f, completed[0].leftAmplitude);

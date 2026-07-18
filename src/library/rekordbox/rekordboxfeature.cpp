@@ -15,6 +15,7 @@
 #include "library/dao/trackschema.h"
 #include "library/library.h"
 #include "library/queryutil.h"
+#include "library/rekordbox/rekordboxbeatgrid.h"
 #include "library/rekordbox/rekordboxconstants.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
@@ -903,8 +904,18 @@ void readAnalyze(TrackPointer track,
                             section->body());
 
             QVector<mixxx::audio::FramePos> beats;
+            int firstBeatNumber = 1;
+            mixxx::audio::FrameDiff_t firstBeatLengthFrames = 0.0;
 
             for (const auto& beat : *beatGridTag->beats()) {
+                if (beats.isEmpty()) {
+                    firstBeatNumber = static_cast<int>(beat->beat_number());
+                    const int tempo = static_cast<int>(beat->tempo());
+                    if (tempo > 0) {
+                        firstBeatLengthFrames =
+                                60.0 * 100.0 * sampleRate / tempo;
+                    }
+                }
                 int time = static_cast<int>(beat->time()) - timingOffset;
                 // Ensure no offset times are less than 1
                 if (time < 1) {
@@ -912,6 +923,9 @@ void readAnalyze(TrackPointer track,
                 }
                 beats << mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
             }
+
+            beats = mixxx::rekordbox::withDownbeatAnchor(
+                    beats, firstBeatNumber, firstBeatLengthFrames);
 
             const auto pBeats = mixxx::Beats::fromBeatPositions(
                     sampleRate,

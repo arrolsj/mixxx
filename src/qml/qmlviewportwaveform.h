@@ -27,10 +27,6 @@ class QmlViewportWaveform : public QQuickItem {
     Q_PROPERTY(QColor highColor READ highColor WRITE setHighColor NOTIFY highColorChanged)
     Q_PROPERTY(QColor midColor READ midColor WRITE setMidColor NOTIFY midColorChanged)
     Q_PROPERTY(QColor lowColor READ lowColor WRITE setLowColor NOTIFY lowColorChanged)
-    Q_PROPERTY(double highGain READ highGain WRITE setHighGain NOTIFY highGainChanged)
-    Q_PROPERTY(double midGain READ midGain WRITE setMidGain NOTIFY midGainChanged)
-    Q_PROPERTY(double lowGain READ lowGain WRITE setLowGain NOTIFY lowGainChanged)
-    Q_PROPERTY(double allGain READ allGain WRITE setAllGain NOTIFY allGainChanged)
     Q_PROPERTY(double trackWidth READ trackWidth NOTIFY trackWidthChanged)
     Q_PROPERTY(double contentX READ contentX NOTIFY contentXChanged)
     QML_NAMED_ELEMENT(ViewportWaveform)
@@ -60,15 +56,6 @@ class QmlViewportWaveform : public QQuickItem {
     QColor lowColor() const;
     void setLowColor(const QColor& color);
 
-    double highGain() const;
-    void setHighGain(double gain);
-    double midGain() const;
-    void setMidGain(double gain);
-    double lowGain() const;
-    void setLowGain(double gain);
-    double allGain() const;
-    void setAllGain(double gain);
-
     double trackWidth() const;
     double contentX() const;
 
@@ -82,10 +69,6 @@ class QmlViewportWaveform : public QQuickItem {
     void highColorChanged();
     void midColorChanged();
     void lowColorChanged();
-    void highGainChanged();
-    void midGainChanged();
-    void lowGainChanged();
-    void allGainChanged();
     void trackWidthChanged();
     void contentXChanged();
 
@@ -119,10 +102,6 @@ class QmlViewportWaveform : public QQuickItem {
     QColor m_highColor{Qt::blue};
     QColor m_midColor{Qt::green};
     QColor m_lowColor{Qt::red};
-    double m_highGain{1.0};
-    double m_midGain{1.0};
-    double m_lowGain{1.0};
-    double m_allGain{1.0};
 };
 
 } // namespace mixxx::qml

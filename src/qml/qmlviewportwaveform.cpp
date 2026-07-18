@@ -209,58 +209,6 @@ void QmlViewportWaveform::setLowColor(const QColor& color) {
     update();
 }
 
-double QmlViewportWaveform::highGain() const {
-    return m_highGain;
-}
-
-void QmlViewportWaveform::setHighGain(double gain) {
-    if (fuzzyEqual(m_highGain, gain)) {
-        return;
-    }
-    m_highGain = gain;
-    emit highGainChanged();
-    update();
-}
-
-double QmlViewportWaveform::midGain() const {
-    return m_midGain;
-}
-
-void QmlViewportWaveform::setMidGain(double gain) {
-    if (fuzzyEqual(m_midGain, gain)) {
-        return;
-    }
-    m_midGain = gain;
-    emit midGainChanged();
-    update();
-}
-
-double QmlViewportWaveform::lowGain() const {
-    return m_lowGain;
-}
-
-void QmlViewportWaveform::setLowGain(double gain) {
-    if (fuzzyEqual(m_lowGain, gain)) {
-        return;
-    }
-    m_lowGain = gain;
-    emit lowGainChanged();
-    update();
-}
-
-double QmlViewportWaveform::allGain() const {
-    return m_allGain;
-}
-
-void QmlViewportWaveform::setAllGain(double gain) {
-    if (fuzzyEqual(m_allGain, gain)) {
-        return;
-    }
-    m_allGain = gain;
-    emit allGainChanged();
-    update();
-}
-
 double QmlViewportWaveform::trackWidth() const {
     return m_viewportMetrics.trackWidth;
 }
@@ -377,12 +325,6 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
 
     const int dataSize = pWaveform->getDataSize();
     const int completion = pWaveform->getCompletion();
-    const waveform::WaveformRgbGains gains{
-            static_cast<float>(std::max(m_allGain, 0.0)),
-            static_cast<float>(std::max(m_lowGain, 0.0)),
-            static_cast<float>(std::max(m_midGain, 0.0)),
-            static_cast<float>(std::max(m_highGain, 0.0)),
-    };
     const std::vector<waveform::WaveformRgbColumn> columns =
             waveform::sampleWaveformRgbColumns(pWaveform->data(),
                     dataSize,
@@ -390,8 +332,7 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                     viewport,
                     toColorF(m_lowColor),
                     toColorF(m_midColor),
-                    toColorF(m_highColor),
-                    gains);
+                    toColorF(m_highColor));
 
     if (columns.empty()) {
         delete pOldNode;
@@ -436,7 +377,7 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
             static_cast<uchar>(m_axesColor.blue()),
             static_cast<uchar>(m_axesColor.alpha()));
 
-    const float amplitudeToHeight = halfHeight / 255.0f;
+    const float amplitudeToHeight = halfHeight / 255.0f * 0.6f;
     const float halfPhysicalPixel =
             static_cast<float>(0.5 / m_devicePixelRatio);
     for (int columnIndex = 0;

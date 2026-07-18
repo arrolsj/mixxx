@@ -15,13 +15,6 @@ struct WaveformRgbColorF {
     float blue{0.0f};
 };
 
-struct WaveformRgbGains {
-    float all{1.0f};
-    float low{1.0f};
-    float mid{1.0f};
-    float high{1.0f};
-};
-
 struct WaveformRgbColumn {
     float leftAmplitude{0.0f};
     float rightAmplitude{0.0f};
@@ -92,8 +85,7 @@ inline std::vector<WaveformRgbColumn> sampleWaveformRgbColumns(
         const WaveformRgbViewportMetrics& viewport,
         const WaveformRgbColorF& lowColor,
         const WaveformRgbColorF& midColor,
-        const WaveformRgbColorF& highColor,
-        const WaveformRgbGains& gains) {
+        const WaveformRgbColorF& highColor) {
     if (data == nullptr || dataSize < 2 || !viewport.isValid()) {
         return {};
     }
@@ -147,29 +139,14 @@ inline std::vector<WaveformRgbColumn> sampleWaveformRgbColumns(
             }
         }
 
-        const float originalLow = static_cast<float>(maxLow);
-        const float originalMid = static_cast<float>(maxMid);
-        const float originalHigh = static_cast<float>(maxHigh);
-        const float originalMagnitudeSquared =
-                originalLow * originalLow + originalMid * originalMid +
-                originalHigh * originalHigh;
-
-        const float low = originalLow * gains.low;
-        const float mid = originalMid * gains.mid;
-        const float high = originalHigh * gains.high;
-        const float gainedMagnitudeSquared =
-                low * low + mid * mid + high * high;
-
-        float amplitudeScale = gains.all;
-        if (originalMagnitudeSquared > 0.0f) {
-            amplitudeScale *=
-                    std::sqrt(gainedMagnitudeSquared / originalMagnitudeSquared);
-        }
+        const float low = static_cast<float>(maxLow);
+        const float mid = static_cast<float>(maxMid);
+        const float high = static_cast<float>(maxHigh);
 
         WaveformRgbColumn& column =
                 columns[static_cast<std::size_t>(columnIndex)];
-        column.leftAmplitude = static_cast<float>(maxAll[0]) * amplitudeScale;
-        column.rightAmplitude = static_cast<float>(maxAll[1]) * amplitudeScale;
+        column.leftAmplitude = static_cast<float>(maxAll[0]);
+        column.rightAmplitude = static_cast<float>(maxAll[1]);
 
         float red = low * lowColor.red + mid * midColor.red +
                 high * highColor.red;
