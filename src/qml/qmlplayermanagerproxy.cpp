@@ -15,14 +15,16 @@ QmlPlayerManagerProxy::QmlPlayerManagerProxy(
 }
 
 QObject* QmlPlayerManagerProxy::getPlayer(const QString& group) {
+
     BaseTrackPlayer* pPlayer = m_pPlayerManager->getPlayer(group);
     if (!pPlayer) {
         qWarning() << "PlayerManagerProxy failed to find player for group" << group;
         return nullptr;
     }
 
-    // Don't set a parent here, so that the QML engine deletes the object when
-    // the corresponding JS object is garbage collected.
+    // A deck player can be replaced while Mixxx initializes its topology.
+    // Keep the proxy scoped to the QML reference so a later getPlayer() call
+    // always resolves the current BaseTrackPlayer.
     QmlPlayerProxy* pPlayerProxy = new QmlPlayerProxy(pPlayer);
     QQmlEngine::setObjectOwnership(pPlayerProxy, QQmlEngine::JavaScriptOwnership);
     connect(pPlayerProxy,

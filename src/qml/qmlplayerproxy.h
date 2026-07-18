@@ -12,10 +12,15 @@
 #include "track/cueinfo.h"
 #include "track/track.h"
 
+#include "util/performancetimer.h"
+#include "waveform/isynctimeprovider.h"
+
+class VisualPlayPosition;
+
 namespace mixxx {
 namespace qml {
 
-class QmlPlayerProxy : public QObject {
+class QmlPlayerProxy : public QObject, private VSyncTimeProvider {
     Q_OBJECT
     Q_PROPERTY(bool isLoaded READ isLoaded NOTIFY trackChanged)
     Q_PROPERTY(QString artist READ getArtist WRITE setArtist NOTIFY artistChanged)
@@ -82,6 +87,7 @@ class QmlPlayerProxy : public QObject {
     Q_INVOKABLE void loadTrackFromLocation(const QString& trackLocation, bool play = false);
     Q_INVOKABLE void loadTrackFromLocationUrl(const QUrl& trackLocationUrl, bool play = false);
 
+    Q_INVOKABLE double getVisualPlayPosition(int frameIntervalMicros = 16667);
   public slots:
     void slotTrackLoaded(TrackPointer pTrack);
     void slotLoadingTrack(TrackPointer pNewTrack, TrackPointer pOldTrack);
@@ -137,8 +143,14 @@ class QmlPlayerProxy : public QObject {
   private:
     QImage m_waveformTexture;
     QPointer<BaseTrackPlayer> m_pTrackPlayer;
+    int fromTimerToNextSyncMicros(const PerformanceTimer& timer) override;
+    int getSyncIntervalTimeMicros() const override;
+    const char* timingSourceName() const override;
+
     TrackPointer m_pCurrentTrack;
     QmlBeatsModel* m_pBeatsModel;
+    PerformanceTimer m_visualFrameTime;
+    int m_visualFrameIntervalMicros;
     QmlCuesModel* m_pHotcuesModel;
 };
 

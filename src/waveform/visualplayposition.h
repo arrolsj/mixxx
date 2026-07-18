@@ -10,6 +10,7 @@
 #include "util/performancetimer.h"
 
 class ControlProxy;
+class VSyncTimeProvider;
 class VSyncThread;
 
 // This class is for synchronizing the sound device DAC time with the waveforms, displayed on the
@@ -68,8 +69,14 @@ class VisualPlayPosition : public QObject {
             double tempoTrackSeconds,
             double audioBufferMicroS);
 
+    // Compatibility entry points for the QWidget waveform path. Both forward
+    // to the shared display-timing implementation below.
     double getAtNextVSync(VSyncThread* pVSyncThread);
     void getPlaySlipAtNextVSync(VSyncThread* pVSyncThread,
+            double* playPosition,
+            double* slipPosition);
+    double getAtNextVSync(VSyncTimeProvider* pSyncTimeProvider);
+    void getPlaySlipAtNextVSync(VSyncTimeProvider* pSyncTimeProvider,
             double* playPosition,
             double* slipPosition);
     double determinePlayPosInLoopBoundries(
@@ -92,11 +99,22 @@ class VisualPlayPosition : public QObject {
     }
 
   private:
-    double calcOffsetAtNextVSync(VSyncThread* pVSyncThread, const VisualPlayPositionData& data);
+    double calcOffsetAtNextVSync(
+            VSyncTimeProvider* pSyncTimeProvider, const VisualPlayPositionData& data);
+    void traceFrame(VSyncTimeProvider* pSyncTimeProvider,
+            const VisualPlayPositionData& data,
+            double position);
     ControlValueAtomic<VisualPlayPositionData> m_data;
     std::atomic<bool> m_valid;
     QString m_key;
     bool m_noTransport;
+    bool m_traceEnabled;
+    bool m_havePreviousTraceFrame;
+    quint64 m_traceSequence;
+    double m_previousTracePosition;
+    double m_previousTraceEnginePosition;
+    double m_previousTracePublishedPosition;
+    PerformanceTimer m_traceTimer;
 
     static QMap<QString, QWeakPointer<VisualPlayPosition>> m_listVisualPlayPosition;
     // Time info from the Sound device, updated just after audio callback is called

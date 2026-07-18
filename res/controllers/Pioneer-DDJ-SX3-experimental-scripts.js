@@ -192,6 +192,36 @@ PioneerDDJSX.activeSlicerMode = [
     PioneerDDJSX.slicerModes.contSlice
 ];
 
+PioneerDDJSX.wrapInactiveDeckInputHandlers = function() {
+    if (PioneerDDJSX.inactiveDeckInputHandlersWrapped) {
+        return;
+    }
+
+    Object.keys(PioneerDDJSX).forEach(function(name) {
+        var handler = PioneerDDJSX[name];
+        if (typeof handler !== "function" ||
+                name === "init" ||
+                name === "shutdown" ||
+                name === "wrapInactiveDeckInputHandlers") {
+            return;
+        }
+
+        PioneerDDJSX[name] = function() {
+            // Legacy XML MIDI script bindings always receive the target group
+            // as their fifth argument. Ignore bindings for decks that Mixxx did
+            // not create instead of letting them access missing ControlObjects.
+            var group = arguments[4];
+            if (/^\[Channel\d+\]$/.test(group) &&
+                    !PioneerDDJSX.channelGroups.hasOwnProperty(group)) {
+                return;
+            }
+            return handler.apply(PioneerDDJSX, arguments);
+        };
+    });
+
+    PioneerDDJSX.inactiveDeckInputHandlersWrapped = true;
+};
+
 
 PioneerDDJSX.init = function(id) {
     PioneerDDJSX.scratchSettings = {
@@ -201,12 +231,17 @@ PioneerDDJSX.init = function(id) {
         'vinylSpeed': 33 + 1 / 3,
     };
 
-    PioneerDDJSX.channelGroups = {
-        '[Channel1]': 0x00,
-        '[Channel2]': 0x01,
-        '[Channel3]': 0x02,
-        '[Channel4]': 0x03
-    };
+    var configuredDeckCount = Math.floor(engine.getValue("[App]", "num_decks"));
+    if (!isFinite(configuredDeckCount) || configuredDeckCount < 1) {
+        configuredDeckCount = 4;
+    }
+    configuredDeckCount = Math.min(configuredDeckCount, 4);
+
+    PioneerDDJSX.channelGroups = {};
+    for (var deckNumber = 1; deckNumber <= configuredDeckCount; deckNumber++) {
+        PioneerDDJSX.channelGroups["[Channel" + deckNumber + "]"] = deckNumber - 1;
+    }
+    PioneerDDJSX.wrapInactiveDeckInputHandlers();
 
     PioneerDDJSX.samplerGroups = {
         '[Sampler1]': 0x00,
@@ -438,10 +473,11 @@ PioneerDDJSX.init = function(id) {
 };
 
 PioneerDDJSX.shutdown = function() {
-    PioneerDDJSX.resetDeck("[Channel1]");
-    PioneerDDJSX.resetDeck("[Channel2]");
-    PioneerDDJSX.resetDeck("[Channel3]");
-    PioneerDDJSX.resetDeck("[Channel4]");
+    for (var group in PioneerDDJSX.channelGroups) {
+        if (PioneerDDJSX.channelGroups.hasOwnProperty(group)) {
+            PioneerDDJSX.resetDeck(group);
+        }
+    }
 
     PioneerDDJSX.resetNonDeckLeds();
 };

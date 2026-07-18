@@ -1,8 +1,9 @@
 #include "waveform/visualplayposition.h"
 
+#include "control/controlobject.h"
 #include "moc_visualplayposition.cpp"
-#include "util/cmdlineargs.h"
 #include "util/math.h"
+#include "waveform/isynctimeprovider.h"
 #include "waveform/vsyncthread.h"
 
 //static
@@ -13,7 +14,16 @@ double VisualPlayPosition::m_dCallbackEntryToDacSecs = 0;
 VisualPlayPosition::VisualPlayPosition(const QString& key)
         : m_valid{false},
           m_key{key},
-          m_noTransport{false} {
+          m_noTransport{false},
+          m_traceEnabled{qEnvironmentVariableIsSet("LASTCUE_WAVEFORM_TRACE")},
+          m_havePreviousTraceFrame{false},
+          m_traceSequence{0},
+          m_previousTracePosition{0.0},
+          m_previousTraceEnginePosition{0.0},
+          m_previousTracePublishedPosition{0.0} {
+    if (m_traceEnabled) {
+        m_traceTimer.start();
+    }
 }
 
 VisualPlayPosition::~VisualPlayPosition() {
@@ -57,20 +67,12 @@ void VisualPlayPosition::set(
 }
 
 double VisualPlayPosition::calcOffsetAtNextVSync(
-        VSyncThread* pVSyncThread, const VisualPlayPositionData& data) {
+        VSyncTimeProvider* pSyncTimeProvider, const VisualPlayPositionData& data) {
     if (data.m_audioBufferMicroS != 0.0) {
-        int refToVSync;
-        int syncIntervalTimeMicros;
-#ifdef MIXXX_USE_QML
-        if (CmdlineArgs::Instance().isQml()) {
-            refToVSync = 0;
-            syncIntervalTimeMicros = 0;
-        } else
-#endif
-        {
-            refToVSync = pVSyncThread->fromTimerToNextSyncMicros(data.m_referenceTime);
-            syncIntervalTimeMicros = pVSyncThread->getSyncIntervalTimeMicros();
-        }
+        const int refToVSync =
+                pSyncTimeProvider->fromTimerToNextSyncMicros(data.m_referenceTime);
+        const int syncIntervalTimeMicros =
+                pSyncTimeProvider->getSyncIntervalTimeMicros();
         // The positive offset is limited to the audio buffer + 2 x waveform sync interval
         // This should be sufficient to compensate jitter, but does not continue
         // in case of underflows.
@@ -162,24 +164,39 @@ double VisualPlayPosition::determinePlayPosInLoopBoundries(
 }
 
 double VisualPlayPosition::getAtNextVSync(VSyncThread* pVSyncThread) {
-    if (m_valid.load()) {
-        const VisualPlayPositionData data = m_data.getValue();
-        const double offset = calcOffsetAtNextVSync(pVSyncThread, data);
-
-        return determinePlayPosInLoopBoundries(data, offset);
-    }
-    return -1;
+    return getAtNextVSync(static_cast<VSyncTimeProvider*>(pVSyncThread));
 }
 
 void VisualPlayPosition::getPlaySlipAtNextVSync(VSyncThread* pVSyncThread,
         double* pPlayPosition,
         double* pSlipPosition) {
+    getPlaySlipAtNextVSync(static_cast<VSyncTimeProvider*>(pVSyncThread),
+            pPlayPosition,
+            pSlipPosition);
+}
+double VisualPlayPosition::getAtNextVSync(VSyncTimeProvider* pSyncTimeProvider) {
+    if (m_valid.load()) {
+
+        const VisualPlayPositionData data = m_data.getValue();
+        const double offset = calcOffsetAtNextVSync(pSyncTimeProvider, data);
+        const double position = determinePlayPosInLoopBoundries(data, offset);
+
+        traceFrame(pSyncTimeProvider, data, position);
+        return position;
+    }
+    return -1;
+}
+
+void VisualPlayPosition::getPlaySlipAtNextVSync(VSyncTimeProvider* pSyncTimeProvider,
+        double* pPlayPosition,
+        double* pSlipPosition) {
     if (m_valid.load()) {
         const VisualPlayPositionData data = m_data.getValue();
-        const double offset = calcOffsetAtNextVSync(pVSyncThread, data);
+        const double offset = calcOffsetAtNextVSync(pSyncTimeProvider, data);
 
         double interpolatedPlayPos = determinePlayPosInLoopBoundries(data, offset);
         *pPlayPosition = interpolatedPlayPos;
+        traceFrame(pSyncTimeProvider, data, interpolatedPlayPos);
 
         if (data.m_slipModeState == SlipModeState::Running) {
             *pSlipPosition = data.m_slipPos + offset * data.m_slipRate;
@@ -187,6 +204,48 @@ void VisualPlayPosition::getPlaySlipAtNextVSync(VSyncThread* pVSyncThread,
             *pSlipPosition = interpolatedPlayPos;
         }
     }
+}
+
+void VisualPlayPosition::traceFrame(VSyncTimeProvider* pSyncTimeProvider,
+        const VisualPlayPositionData& data,
+        double position) {
+    if (!m_traceEnabled || m_key.isEmpty()) {
+        return;
+    }
+
+    const double publishedPosition =
+            ControlObject::get(ConfigKey(m_key, QStringLiteral("playposition")));
+    const double displayDelta = m_havePreviousTraceFrame
+            ? position - m_previousTracePosition
+            : 0.0;
+    const double engineDelta = m_havePreviousTraceFrame
+            ? data.m_playPos - m_previousTraceEnginePosition
+            : 0.0;
+    const double publishedDelta = m_havePreviousTraceFrame
+            ? publishedPosition - m_previousTracePublishedPosition
+            : 0.0;
+
+    qInfo().noquote().nospace()
+            << "LASTCUE_WAVEFORM_FRAME"
+            << " group=" << m_key
+            << " seq=" << m_traceSequence++
+            << " monotonic_us=" << m_traceTimer.elapsed().toIntegerMicros()
+            << " timing_source=" << pSyncTimeProvider->timingSourceName()
+            << " engine=" << QString::number(data.m_playPos, 'g', 17)
+            << " published=" << QString::number(publishedPosition, 'g', 17)
+            << " display=" << QString::number(position, 'g', 17)
+            << " delta_engine=" << QString::number(engineDelta, 'g', 17)
+            << " delta_published=" << QString::number(publishedDelta, 'g', 17)
+            << " delta_display=" << QString::number(displayDelta, 'g', 17)
+            << " play_rate=" << QString::number(data.m_playRate, 'g', 17)
+            << " loop_enabled=" << (data.m_loopEnabled ? 1 : 0)
+            << " loop_start=" << QString::number(data.m_loopStartPos, 'g', 17)
+            << " loop_end=" << QString::number(data.m_loopEndPos, 'g', 17);
+
+    m_previousTracePosition = position;
+    m_previousTraceEnginePosition = data.m_playPos;
+    m_previousTracePublishedPosition = publishedPosition;
+    m_havePreviousTraceFrame = true;
 }
 
 double VisualPlayPosition::getEnginePlayPos() {

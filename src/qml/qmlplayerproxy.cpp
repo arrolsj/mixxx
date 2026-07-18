@@ -1,10 +1,12 @@
 #include "qml/qmlplayerproxy.h"
 
 #include <QBuffer>
+#include <algorithm>
 
 #include "mixer/basetrackplayer.h"
 #include "moc_qmlplayerproxy.cpp"
 #include "qml/asyncimageprovider.h"
+#include "waveform/visualplayposition.h"
 
 #define PROPERTY_IMPL_GETTER(TYPE, NAME, GETTER)     \
     TYPE QmlPlayerProxy::GETTER() const {            \
@@ -30,6 +32,7 @@ namespace qml {
 QmlPlayerProxy::QmlPlayerProxy(BaseTrackPlayer* pTrackPlayer, QObject* parent)
         : QObject(parent),
           m_pTrackPlayer(pTrackPlayer),
+          m_visualFrameIntervalMicros(16667),
           m_pBeatsModel(new QmlBeatsModel(this)),
           m_pHotcuesModel(new QmlCuesModel(this)) {
     connect(m_pTrackPlayer,
@@ -48,6 +51,39 @@ QmlPlayerProxy::QmlPlayerProxy(BaseTrackPlayer* pTrackPlayer, QObject* parent)
     if (m_pTrackPlayer && m_pTrackPlayer->getLoadedTrack()) {
         slotTrackLoaded(pTrackPlayer->getLoadedTrack());
     }
+}
+
+double QmlPlayerProxy::getVisualPlayPosition(int frameIntervalMicros) {
+    if (!m_pTrackPlayer) {
+        return -1.0;
+    }
+
+    // Do not retain engine-owned timing state in a JavaScript-owned proxy.
+    // Proxy lifetime is controlled by QML garbage collection, while the
+    // VisualPlayPosition lifetime is controlled by the audio engine.
+    const auto pVisualPlayPosition =
+            VisualPlayPosition::getVisualPlayPosition(m_pTrackPlayer->getGroup());
+    if (!pVisualPlayPosition || !pVisualPlayPosition->isValid()) {
+        return -1.0;
+    }
+
+    m_visualFrameIntervalMicros = std::max(0, frameIntervalMicros);
+    m_visualFrameTime.start();
+    return pVisualPlayPosition->getAtNextVSync(this);
+}
+
+int QmlPlayerProxy::fromTimerToNextSyncMicros(const PerformanceTimer& timer) {
+    return static_cast<int>(
+            m_visualFrameTime.difference(timer).toIntegerMicros()) +
+            m_visualFrameIntervalMicros;
+}
+
+int QmlPlayerProxy::getSyncIntervalTimeMicros() const {
+    return m_visualFrameIntervalMicros;
+}
+
+const char* QmlPlayerProxy::timingSourceName() const {
+    return "qml-animation-tick";
 }
 
 void QmlPlayerProxy::loadTrackFromLocation(const QString& trackLocation, bool play) {

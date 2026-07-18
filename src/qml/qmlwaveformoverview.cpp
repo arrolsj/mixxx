@@ -36,16 +36,23 @@ void QmlWaveformOverview::setPlayer(QmlPlayerProxy* pPlayer) {
     m_pPlayer = pPlayer;
 
     if (m_pPlayer != nullptr) {
-        setCurrentTrack(m_pPlayer->internalTrackPlayer()->getLoadedTrack());
-        connect(m_pPlayer->internalTrackPlayer(),
+        BaseTrackPlayer* pTrackPlayer = m_pPlayer->internalTrackPlayer();
+        if (pTrackPlayer == nullptr) {
+            qWarning() << "QmlWaveformOverview received a stale player proxy";
+            emit playerChanged();
+            update();
+            return;
+        }
+        setCurrentTrack(pTrackPlayer->getLoadedTrack());
+        connect(pTrackPlayer,
                 &BaseTrackPlayer::newTrackLoaded,
                 this,
                 &QmlWaveformOverview::slotTrackLoaded);
-        connect(m_pPlayer->internalTrackPlayer(),
+        connect(pTrackPlayer,
                 &BaseTrackPlayer::loadingTrack,
                 this,
                 &QmlWaveformOverview::slotTrackLoading);
-        connect(m_pPlayer->internalTrackPlayer(),
+        connect(pTrackPlayer,
                 &BaseTrackPlayer::playerEmpty,
                 this,
                 &QmlWaveformOverview::slotTrackUnloaded);

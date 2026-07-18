@@ -43,22 +43,6 @@ Item {
 
             group: root.group
             key: "playposition"
-
-            onValueChanged: value => waveformContainer.acceptEnginePosition(value)
-        }
-
-        Mixxx.ControlProxy {
-            id: playControl
-
-            group: root.group
-            key: "play"
-
-            onValueChanged: value => {
-                if (value <= 0) {
-                    waveformContainer.interpolationReady = false;
-                    waveformContainer.displayedPlayPosition = playPositionControl.value;
-                }
-            }
         }
 
         Mixxx.ControlProxy {
@@ -131,73 +115,22 @@ Item {
             key: "cue_point"
         }
 
-        // EngineBuffer intentionally publishes the UI playposition at only
-        // 15 Hz. Keep the native Mixxx waveform renderer, beat grid and cue
-        // models, but interpolate those engine samples at display cadence so
-        // the fixed play marker does not advance in visible 67 ms steps.
+        // The generic playposition control is intentionally published at only
+        // 15 Hz. Sample the audio engine's VisualPlayPosition at display cadence
+        // instead. This is the same clock, DAC compensation, rate and loop-boundary
+        // calculation used by the stable QWidget waveform; no QML-side velocity
+        // estimation or correction is applied.
         property real displayedPlayPosition: playPositionControl.value
-        property real previousEnginePosition: -1
-        property double previousEngineTimestamp: 0
-        property real positionVelocityPerMs: 0
-        property real interpolationAnchorPosition: playPositionControl.value
-        property double interpolationAnchorTimestamp: 0
-        property bool interpolationReady: false
-
-        function acceptEnginePosition(position) {
-            const now = Date.now();
-            if (previousEngineTimestamp > 0) {
-                const elapsed = now - previousEngineTimestamp;
-                const delta = position - previousEnginePosition;
-                const normalPlaybackStep = elapsed > 0 && Math.abs(delta) < 0.02;
-
-                if (playControl.value > 0 && normalPlaybackStep) {
-                    const measuredVelocity = delta / elapsed;
-                    const predictedPosition = interpolationReady
-                            ? interpolationAnchorPosition
-                                    + positionVelocityPerMs
-                                            * (now - interpolationAnchorTimestamp)
-                            : previousEnginePosition;
-
-                    // Correct timing jitter gradually. Large discontinuities
-                    // (seek, cue or loop wrap) are snapped in the branch below.
-                    interpolationAnchorPosition = predictedPosition
-                            + (position - predictedPosition) * 0.35;
-                    interpolationAnchorTimestamp = now;
-                    positionVelocityPerMs = interpolationReady
-                            ? positionVelocityPerMs * 0.25 + measuredVelocity * 0.75
-                            : measuredVelocity;
-                    interpolationReady = true;
-                } else {
-                    displayedPlayPosition = position;
-                    interpolationAnchorPosition = position;
-                    interpolationAnchorTimestamp = now;
-                    positionVelocityPerMs = 0;
-                    interpolationReady = false;
-                }
-            } else {
-                displayedPlayPosition = position;
-                interpolationAnchorPosition = position;
-                interpolationAnchorTimestamp = now;
-            }
-
-            previousEnginePosition = position;
-            previousEngineTimestamp = now;
-        }
 
         Timer {
             interval: 16
             repeat: true
-            running: root.deckPlayer.isLoaded && playControl.value > 0
+            running: root.deckPlayer.isLoaded
             onTriggered: {
-                if (playControl.value > 0 && waveformContainer.interpolationReady) {
-                    const predictedPosition = waveformContainer.interpolationAnchorPosition
-                            + waveformContainer.positionVelocityPerMs
-                                    * (Date.now() - waveformContainer.interpolationAnchorTimestamp);
-                    waveformContainer.displayedPlayPosition = Math.max(0,
-                            Math.min(1, predictedPosition));
-                } else {
-                    waveformContainer.displayedPlayPosition = playPositionControl.value;
-                }
+                const visualPosition = root.deckPlayer.getVisualPlayPosition(interval * 1000);
+                waveformContainer.displayedPlayPosition = visualPosition >= 0
+                        ? visualPosition
+                        : playPositionControl.value;
             }
         }
 
