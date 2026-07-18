@@ -36,6 +36,8 @@ class QmlLibraryProxy : public QObject {
     }
     Q_INVOKABLE bool activateSource(const QModelIndex& sourceIndex);
     Q_INVOKABLE QModelIndex parentSource(const QModelIndex& sourceIndex) const;
+    Q_INVOKABLE bool loadTrackToPlayer(
+            int row, const QString& group, bool play = false);
     bool mediaReady() const;
     bool mediaScanInProgress() const;
     int mediaDeviceCount() const;

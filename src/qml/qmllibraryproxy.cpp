@@ -5,6 +5,7 @@
 #include "library/library.h"
 #include "library/librarytablemodel.h"
 #include "library/sidebarmodel.h"
+#include "library/trackmodel.h"
 #include "moc_qmllibraryproxy.cpp"
 
 namespace mixxx {
@@ -69,6 +70,39 @@ QModelIndex QmlLibraryProxy::parentSource(const QModelIndex& sourceIndex) const 
         return {};
     }
     return sourceIndex.parent();
+}
+
+bool QmlLibraryProxy::loadTrackToPlayer(
+        int row, const QString& group, bool play) {
+    if (row < 0 || group.isEmpty()) {
+        return false;
+    }
+
+    const QModelIndex proxyIndex = m_pModelProperty->index(row, 0);
+    if (!proxyIndex.isValid()) {
+        return false;
+    }
+
+    auto* pTrackModel = dynamic_cast<TrackModel*>(m_pModelProperty->sourceModel());
+    VERIFY_OR_DEBUG_ASSERT(pTrackModel) {
+        return false;
+    }
+
+    const QModelIndex sourceIndex = m_pModelProperty->mapToSource(proxyIndex);
+    VERIFY_OR_DEBUG_ASSERT(sourceIndex.isValid()) {
+        return false;
+    }
+
+    // Loading through TrackModel::getTrack() is essential for external
+    // libraries. RekordboxPlaylistModel overrides it to parse the track's
+    // ANLZ beat grid, Hot Cues and Memory Cues before the deck receives the
+    // TrackPointer. Loading only by file URL bypasses that import step.
+    const TrackPointer pTrack = pTrackModel->getTrack(sourceIndex);
+    if (!pTrack) {
+        return false;
+    }
+    m_pLibrary->slotLoadTrackToPlayer(pTrack, group, play);
+    return true;
 }
 
 // static
