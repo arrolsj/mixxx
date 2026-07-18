@@ -2,6 +2,7 @@ import "." as Skin
 import Mixxx 1.0 as Mixxx
 import QtQuick 2.14
 import QtQuick.Shapes 1.12
+import QtQuick.Window 2.14
 import "Theme"
 
 Item {
@@ -299,13 +300,38 @@ Item {
             Repeater {
                 model: root.deckPlayer.beatsModel
 
-                Rectangle {
-                    property real alpha: 0.9 // TODO: Make this configurable (i.e., "[Waveform],beatGridAlpha" config option)
+                Shape {
+                    id: beatLine
 
-                    width: 1
+                    required property real framePosition
+                    required property bool isDownbeat
+
+                    property real physicalPixel: 1 / Screen.devicePixelRatio
+                    property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * waveform.width
+
+                    width: physicalPixel
                     height: waveform.height
-                    x: (framePosition * 2 / samplesControl.value) * waveform.width
-                    color: Theme.waveformBeatColor
+                    opacity: beatLine.isDownbeat ? 0.9 : 0.65
+                    // Snap the final global position, including contentX, so
+                    // dashed lines stay crisp while sharing the waveform's
+                    // viewport-driven track coordinate transform.
+                    x: Math.round((waveform.x + trackX) * Screen.devicePixelRatio) /
+                            Screen.devicePixelRatio - waveform.x - width / 2
+
+                    ShapePath {
+                        strokeColor: beatLine.isDownbeat ? Theme.waveformDownbeatColor : Theme.waveformBeatColor
+                        strokeWidth: beatLine.physicalPixel
+                        strokeStyle: ShapePath.DashLine
+                        dashPattern: beatLine.isDownbeat ? [4, 3] : [3, 3]
+                        fillColor: "transparent"
+                        startX: beatLine.width / 2
+                        startY: 0
+
+                        PathLine {
+                            x: beatLine.width / 2
+                            y: beatLine.height
+                        }
+                    }
                 }
             }
 

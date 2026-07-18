@@ -7,19 +7,29 @@ namespace qml {
 namespace {
 const QHash<int, QByteArray> kRoleNames = {
         {QmlBeatsModel::FramePositionRole, "framePosition"},
+        {QmlBeatsModel::IsDownbeatRole, "isDownbeat"},
 };
 }
 
 QmlBeatsModel::QmlBeatsModel(
         QObject* parent)
-        : QAbstractListModel(parent), m_pBeats(nullptr), m_numBeats(0) {
+        : QAbstractListModel(parent),
+          m_pBeats(nullptr),
+          m_numBeats(0),
+          m_firstBeatOffset(0) {
 }
 
 void QmlBeatsModel::setBeats(const BeatsPointer pBeats, audio::FramePos trackEndPosition) {
     beginResetModel();
     m_numBeats = 0;
+    m_firstBeatOffset = 0;
     m_pBeats = pBeats;
     if (pBeats != nullptr) {
+        // For constant grids cfirstmarker() is the persisted first-downbeat
+        // anchor. Beat maps do not carry separate bar metadata, so their first
+        // marker is the stable, beatgrid-adjustable fallback phase anchor.
+        m_firstBeatOffset = pBeats->iteratorFrom(audio::kStartFramePos) -
+                pBeats->cfirstmarker();
         m_numBeats = pBeats->numBeatsInRange(audio::kStartFramePos, trackEndPosition);
     }
     endResetModel();
@@ -43,6 +53,11 @@ QVariant QmlBeatsModel::data(const QModelIndex& index, int role) const {
     switch (role) {
     case QmlBeatsModel::FramePositionRole:
         return (*it).value();
+    case QmlBeatsModel::IsDownbeatRole: {
+        constexpr int kBeatsPerBar = 4;
+        const int beatOffset = m_firstBeatOffset + index.row();
+        return ((beatOffset % kBeatsPerBar) + kBeatsPerBar) % kBeatsPerBar == 0;
+    }
     default:
         return QVariant();
     }

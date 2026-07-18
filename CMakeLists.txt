@@ -2252,6 +2252,7 @@ if(BUILD_TESTING)
     list(
       APPEND
       src-mixxx-test
+      src/test/qmlbeatsmodel_test.cpp
       src/test/qmlcontrollerstatus_test.cpp
       src/test/qmllibrarytracklistmodel_test.cpp
     )

@@ -39,6 +39,7 @@ QtObject {
     property color waveformPrerollColor: midGray
     property color waveformPostrollColor: midGray
     property color waveformBeatColor: lightGray
+    property color waveformDownbeatColor: red
     property color waveformCursorColor: white
     property color waveformMarkerDefault: '#ff7a01'
     property color waveformMarkerLabel: Qt.rgba(255, 255, 255, 0.8)
