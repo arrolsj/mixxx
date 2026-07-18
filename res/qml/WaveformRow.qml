@@ -19,7 +19,7 @@ Item {
     Item {
         id: waveformContainer
 
-        property real duration: samplesControl.value / sampleRateControl.value
+        property real duration: samplesControl.value / (2 * sampleRateControl.value)
 
         anchors.fill: parent
         clip: true
@@ -57,6 +57,62 @@ Item {
 
             group: root.group
             key: "waveform_zoom"
+        }
+
+        Mixxx.ControlProxy {
+            id: totalGainControl
+
+            group: root.group
+            key: "total_gain"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterWaveformEnableControl
+
+            group: root.group
+            key: "filterWaveformEnable"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterHighControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "parameter3"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterHighKillControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "button_parameter3"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterMidControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "parameter2"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterMidKillControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "button_parameter2"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterLowControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "parameter1"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterLowKillControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "button_parameter1"
         }
 
         Mixxx.ControlProxy {
@@ -134,27 +190,49 @@ Item {
             }
         }
 
+        // Unlike the former whole-track ShaderEffect, this item always owns
+        // exactly one column per physical viewport pixel. Each column is a
+        // range maximum on a track-global pixel grid, matching the stable
+        // QWidget RGB renderer without creating an unbounded item or texture.
+        Mixxx.ViewportWaveform {
+            id: viewportWaveform
+
+            anchors.fill: parent
+            player: root.deckPlayer
+            displayPosition: waveformContainer.displayedPlayPosition
+            zoom: zoomControl.value
+            rateRatio: rateRatioControl.value
+            playMarkerPosition: playMarker.screenPosition
+            axesColor: "#FFFFFF"
+            highColor: "#0000FF"
+            midColor: "#00FF00"
+            lowColor: "#FF0000"
+            highGain: filterWaveformEnableControl.value
+                    ? (filterHighKillControl.value ? 0 : filterHighControl.value) : 1
+            midGain: filterWaveformEnableControl.value
+                    ? (filterMidKillControl.value ? 0 : filterMidControl.value) : 1
+            lowGain: filterWaveformEnableControl.value
+                    ? (filterLowKillControl.value ? 0 : filterLowControl.value) : 1
+            allGain: totalGainControl.value
+            visible: root.deckPlayer.isLoaded
+        }
+
         Item {
             id: waveform
 
-            property real effectiveZoomFactor: (1 / rateRatioControl.value) * (100 / zoomControl.value)
+            property real effectiveZoomFactor: waveformContainer.duration > 0
+                    ? width / waveformContainer.duration : 0
 
-            width: waveformContainer.duration * effectiveZoomFactor
+            width: viewportWaveform.trackWidth
             height: parent.height
-            x: playMarker.screenPosition * waveformContainer.width
-                    - waveformContainer.displayedPlayPosition * width
+            x: viewportWaveform.contentX
             visible: root.deckPlayer.isLoaded
-
-            WaveformShader {
-                group: root.group
-                anchors.fill: parent
-            }
 
             Shape {
                 id: preroll
 
                 property real triangleHeight: waveform.height
-                property real triangleWidth: 0.25 * waveform.effectiveZoomFactor
+                property real triangleWidth: Math.max(1, 0.25 * waveform.effectiveZoomFactor)
                 property int numTriangles: Math.ceil(width / triangleWidth)
 
                 anchors.top: waveform.top
@@ -188,7 +266,7 @@ Item {
                 id: postroll
 
                 property real triangleHeight: waveform.height
-                property real triangleWidth: 0.25 * waveform.effectiveZoomFactor
+                property real triangleWidth: Math.max(1, 0.25 * waveform.effectiveZoomFactor)
                 property int numTriangles: Math.ceil(width / triangleWidth)
 
                 anchors.top: waveform.top
