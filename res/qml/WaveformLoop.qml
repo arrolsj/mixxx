@@ -12,7 +12,7 @@ Item {
 
     property color mainColor: Theme.waveformMarkerLoopColor
     property color disabledColor: Theme.waveformMarkerLoopColorDisabled
-    property real enabledOpacity: 0.8
+    property real enabledOpacity: 0.45
     property real disabledOpacity: 0.5
 
     property real markerHeight: root.height
