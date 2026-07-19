@@ -1,3 +1,7 @@
+#if defined(__WINDOWS__)
+#include <windows.h>
+#endif
+
 #include "library/rekordbox/rekordboxfeature.h"
 
 #include <mp3guessenc.h>
@@ -10,6 +14,7 @@
 #include <QMap>
 #include <QMessageBox>
 #include <QSettings>
+#include <QSet>
 #include <QString>
 #include <QTextCodec>
 #include <QtDebug>
@@ -52,6 +57,104 @@ const QString kPLaylistPathDelimiter = QStringLiteral("-->");
 constexpr quint32 kPdbHeaderSize = 28;
 constexpr quint32 kPdbTablePointerSize = 16;
 constexpr quint32 kMinimumPdbPageSize = 40;
+constexpr quint32 kDeviceNameOffsetInHistoryRow = 30;
+
+QString getText(rekordbox_pdb_t::device_sql_string_t* deviceString);
+
+QString rekordboxDeviceNameFromDatabase(const QFileInfo& databaseFileInfo) {
+    try {
+        std::ifstream databaseStream(
+                databaseFileInfo.filePath().toStdString(),
+                std::ifstream::binary);
+        if (!databaseStream.is_open()) {
+            return {};
+        }
+
+        kaitai::kstream databaseKStream(&databaseStream);
+        rekordbox_pdb_t database(&databaseKStream);
+
+        for (const auto* table : *database.tables()) {
+            if (table->type() != rekordbox_pdb_t::PAGE_TYPE_HISTORY) {
+                continue;
+            }
+
+            const quint32 lastPageIndex = table->last_page()->index();
+            rekordbox_pdb_t::page_ref_t* currentPageRef = table->first_page();
+            QSet<quint32> visitedPageIndexes;
+            while (currentPageRef &&
+                    !visitedPageIndexes.contains(currentPageRef->index())) {
+                const quint32 currentPageIndex = currentPageRef->index();
+                visitedPageIndexes.insert(currentPageIndex);
+
+                rekordbox_pdb_t::page_t* page = currentPageRef->body();
+                if (page->type() != rekordbox_pdb_t::PAGE_TYPE_HISTORY) {
+                    break;
+                }
+
+                if (page->is_data_page()) {
+                    for (auto* rowGroup : *page->row_groups()) {
+                        for (auto* rowRef : *rowGroup->rows()) {
+                            if (!rowRef->present() || rowRef->row_base() < 0) {
+                                continue;
+                            }
+
+                            const quint64 deviceNameOffset =
+                                    static_cast<quint64>(currentPageIndex) *
+                                            database.len_page() +
+                                    static_cast<quint64>(rowRef->row_base()) +
+                                    kDeviceNameOffsetInHistoryRow;
+                            if (deviceNameOffset >=
+                                    static_cast<quint64>(databaseFileInfo.size())) {
+                                continue;
+                            }
+
+                            databaseKStream.seek(
+                                    static_cast<std::streamoff>(deviceNameOffset));
+                            rekordbox_pdb_t::device_sql_string_t deviceName(
+                                    &databaseKStream, nullptr, &database);
+                            const QString name = getText(&deviceName).trimmed();
+                            if (!name.isEmpty()) {
+                                return name;
+                            }
+                        }
+                    }
+                }
+
+                if (currentPageIndex == lastPageIndex) {
+                    break;
+                }
+                currentPageRef = page->next_page();
+            }
+        }
+    } catch (...) {
+        qWarning() << "Unable to read Rekordbox device name from"
+                   << databaseFileInfo.filePath();
+    }
+
+    return {};
+}
+#if defined(__WINDOWS__)
+QString windowsVolumeLabel(const QString& path) {
+    QString rootPath = QDir::toNativeSeparators(path);
+    if (!rootPath.endsWith(QLatin1Char('\\'))) {
+        rootPath.append(QLatin1Char('\\'));
+    }
+
+    wchar_t volumeName[MAX_PATH + 1] = {};
+    if (!GetVolumeInformationW(
+                reinterpret_cast<LPCWSTR>(rootPath.utf16()),
+                volumeName,
+                MAX_PATH + 1,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                0)) {
+        return {};
+    }
+    return QString::fromWCharArray(volumeName).trimmed();
+}
+#endif
 
 quint32 readLittleEndianU32(const QByteArray& bytes, qsizetype offset) {
     return qFromLittleEndian<quint32>(
@@ -294,6 +397,15 @@ QList<TreeItem*> findRekordboxDevices() {
             QString displayPath = drive.filePath();
             if (displayPath.endsWith("/")) {
                 displayPath.chop(1);
+            }
+            QString deviceName =
+                    rekordboxDeviceNameFromDatabase(rbDBFileInfo);
+            if (deviceName.isEmpty()) {
+                deviceName = windowsVolumeLabel(drive.filePath());
+            }
+            if (!deviceName.isEmpty()) {
+                displayPath = QStringLiteral("%1 · %2")
+                                      .arg(displayPath, deviceName);
             }
             QList<QString> data;
             data << drive.filePath();
