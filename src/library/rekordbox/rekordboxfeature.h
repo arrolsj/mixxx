@@ -26,6 +26,7 @@
 
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QList>
 #include <QStringListModel>
 #include <QtConcurrentRun>
 #include <fstream>
@@ -38,6 +39,17 @@
 
 class TrackCollectionManager;
 class BaseExternalPlaylistModel;
+
+struct RekordboxPlaylistTreeEntry {
+    int parentIndex{-1};
+    QString label;
+    QString path;
+};
+
+struct RekordboxImportResult {
+    QString devicePath;
+    QList<RekordboxPlaylistTreeEntry> playlistTree;
+};
 
 class RekordboxPlaylistModel : public BaseExternalPlaylistModel {
     Q_OBJECT
@@ -67,6 +79,7 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     TreeItemModel* sidebarModel() const override;
     int deviceCount() const;
     bool isDeviceScanRunning() const;
+    bool isDatabaseImportRunning() const;
     void scanDevices();
 
   public slots:
@@ -79,6 +92,7 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
   signals:
     void devicesChanged();
     void deviceScanStateChanged();
+    void databaseImportStateChanged();
 
   private slots:
     void htmlLinkClicked(const QUrl& link);
@@ -93,8 +107,8 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
 
     QFutureWatcher<QList<TreeItem*>> m_devicesFutureWatcher;
     QFuture<QList<TreeItem*>> m_devicesFuture;
-    QFutureWatcher<QString> m_tracksFutureWatcher;
-    QFuture<QString> m_tracksFuture;
+    QFutureWatcher<RekordboxImportResult> m_tracksFutureWatcher;
+    QFuture<RekordboxImportResult> m_tracksFuture;
     QString m_title;
     bool m_featureLoadingRequested{false};
 

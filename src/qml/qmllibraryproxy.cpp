@@ -40,6 +40,10 @@ bool QmlLibraryProxy::mediaScanInProgress() const {
     return m_pLibrary->isRekordboxDeviceScanRunning();
 }
 
+bool QmlLibraryProxy::mediaImportInProgress() const {
+    return m_pLibrary->isRekordboxDatabaseImportRunning();
+}
+
 int QmlLibraryProxy::mediaDeviceCount() const {
     return m_pLibrary->rekordboxDeviceCount();
 }

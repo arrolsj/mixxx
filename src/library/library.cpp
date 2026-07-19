@@ -209,6 +209,10 @@ Library::Library(
                 &RekordboxFeature::deviceScanStateChanged,
                 this,
                 &Library::rekordboxMediaStatusChanged);
+        connect(m_pRekordboxFeature,
+                &RekordboxFeature::databaseImportStateChanged,
+                this,
+                &Library::rekordboxMediaStatusChanged);
         addFeature(m_pRekordboxFeature);
     }
 
@@ -790,4 +794,8 @@ int Library::rekordboxDeviceCount() const {
 
 bool Library::isRekordboxDeviceScanRunning() const {
     return m_pRekordboxFeature && m_pRekordboxFeature->isDeviceScanRunning();
+}
+
+bool Library::isRekordboxDatabaseImportRunning() const {
+    return m_pRekordboxFeature && m_pRekordboxFeature->isDatabaseImportRunning();
 }

@@ -82,6 +82,7 @@ class Library: public QObject {
     void scanRekordboxDevices();
     int rekordboxDeviceCount() const;
     bool isRekordboxDeviceScanRunning() const;
+    bool isRekordboxDatabaseImportRunning() const;
 
     bool isTrackIdInCurrentLibraryView(const TrackId& trackId);
 

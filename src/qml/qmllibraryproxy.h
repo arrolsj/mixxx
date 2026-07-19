@@ -21,6 +21,7 @@ class QmlLibraryProxy : public QObject {
     Q_PROPERTY(mixxx::qml::QmlLibraryTrackListModel* model READ model NOTIFY modelChanged)
     Q_PROPERTY(bool mediaReady READ mediaReady NOTIFY mediaStatusChanged)
     Q_PROPERTY(bool mediaScanInProgress READ mediaScanInProgress NOTIFY mediaStatusChanged)
+    Q_PROPERTY(bool mediaImportInProgress READ mediaImportInProgress NOTIFY mediaStatusChanged)
     Q_PROPERTY(int mediaDeviceCount READ mediaDeviceCount NOTIFY mediaStatusChanged)
     QML_NAMED_ELEMENT(Library)
     QML_SINGLETON
@@ -40,6 +41,7 @@ class QmlLibraryProxy : public QObject {
             int row, const QString& group, bool play = false);
     bool mediaReady() const;
     bool mediaScanInProgress() const;
+    bool mediaImportInProgress() const;
     int mediaDeviceCount() const;
 
     static QmlLibraryProxy* create(QQmlEngine* pQmlEngine, QJSEngine* pJsEngine);
