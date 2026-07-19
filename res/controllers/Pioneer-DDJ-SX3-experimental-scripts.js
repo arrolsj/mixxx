@@ -93,8 +93,8 @@ PioneerDDJSX.jumpPreviewPosition = 0.3;
 // loaded track from cue-point, else it causes to play loaded track from the beginning (default: false).
 PioneerDDJSX.samplerCueGotoAndPlay = false;
 
-// If true, PFL / Cue (headphone) is being activated by loading a track into certain deck (default: true).
-PioneerDDJSX.autoPFL = true;
+// Keep headphone cue selection independent from track loading.
+PioneerDDJSX.autoPFL = false;
 
 
 ///////////////////////////////////////////////////////////////
@@ -115,7 +115,7 @@ PioneerDDJSX.toggledBrake = [false, false, false, false];
 PioneerDDJSX.scratchMode = [true, true, true, true];
 PioneerDDJSX.wheelLedsBlinkStatus = [0, 0, 0, 0];
 PioneerDDJSX.wheelLedsPosition = [0, 0, 0, 0];
-PioneerDDJSX.setUpSpeedSliderRange = [0.08, 0.08, 0.08, 0.08];
+PioneerDDJSX.tempoRanges = [0.08, 0.16, 0.32, 1.00];
 
 // PAD mode storage:
 PioneerDDJSX.padModes = {
@@ -736,9 +736,6 @@ PioneerDDJSX.bindNonDeckControlConnections = function(bind) {
 
 PioneerDDJSX.initDeck = function(group) {
     var deck = PioneerDDJSX.channelGroups[group];
-
-    // save set up speed slider range from the Mixxx settings:
-    PioneerDDJSX.setUpSpeedSliderRange[deck] = engine.getValue(group, "rateRange");
 
     PioneerDDJSX.bindDeckControlConnections(group, true);
 
@@ -1423,21 +1420,21 @@ PioneerDDJSX.keyLockButton = function(channel, control, value, status, group) {
 };
 
 PioneerDDJSX.shiftKeyLockButton = function(channel, control, value, status, group) {
-    var deck = PioneerDDJSX.channelGroups[group],
-        range = engine.getValue(group, "rateRange");
+    var range = engine.getValue(group, "rateRange"),
+        nextRange = PioneerDDJSX.tempoRanges[0],
+        index;
 
     PioneerDDJSX.nonPadLedControl(group, PioneerDDJSX.nonPadLeds.shiftKeyLock, value);
 
-    if (range === 0.90) {
-        range = PioneerDDJSX.setUpSpeedSliderRange[deck];
-    } else if ((range * 2) > 0.90) {
-        range = 0.90;
-    } else {
-        range = range * 2;
+    for (index = 0; index < PioneerDDJSX.tempoRanges.length; index++) {
+        if (Math.abs(range - PioneerDDJSX.tempoRanges[index]) < 0.001) {
+            nextRange = PioneerDDJSX.tempoRanges[(index + 1) % PioneerDDJSX.tempoRanges.length];
+            break;
+        }
     }
 
     if (value) {
-        engine.setValue(group, "rateRange", range);
+        engine.setValue(group, "rateRange", nextRange);
     }
 };
 
@@ -1565,7 +1562,13 @@ PioneerDDJSX.gridSlideButton = function(channel, control, value, status, group) 
 
 PioneerDDJSX.syncButton = function(channel, control, value, status, group) {
     if (value) {
-        script.toggleControl(group, "sync_enabled");
+        engine.setValue(group, "sync_enabled", 1);
+    }
+};
+
+PioneerDDJSX.syncOffButton = function(channel, control, value, status, group) {
+    if (value) {
+        engine.setValue(group, "sync_enabled", 0);
     }
 };
 

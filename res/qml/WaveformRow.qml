@@ -176,7 +176,7 @@ Item {
                     required property int beatNumber
                     readonly property bool isDownbeat: beatNumber === 1
 
-                    property real physicalPixel: 1 / Screen.devicePixelRatio
+                    property real physicalPixel: 2 / Screen.devicePixelRatio
                     property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * waveform.width
 
                     width: physicalPixel
