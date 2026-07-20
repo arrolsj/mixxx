@@ -5,7 +5,13 @@
 namespace mixxx {
 namespace qml {
 
-TEST(QmlFxMappingLearningTest, ExposesSingleSelectedAndGroup3Actions) {
+TEST(QmlFxMappingLearningTest, ExposesCompactGeneralAndFxActionSets) {
+    EXPECT_EQ(QmlFxMappingLearning::generalActionIds().size(), 18);
+    EXPECT_EQ(QmlFxMappingLearning::generalActionIds().first(),
+            QStringLiteral("lastcue.general.back"));
+    EXPECT_EQ(QmlFxMappingLearning::generalActionIds().last(),
+            QStringLiteral("lastcue.general.deck2.beatjump.forward"));
+
     EXPECT_EQ(QmlFxMappingLearning::singleSelectedActionIds(),
             QStringList({
                     QStringLiteral("lastcue.fx.select_delta"),
@@ -16,13 +22,60 @@ TEST(QmlFxMappingLearningTest, ExposesSingleSelectedAndGroup3Actions) {
                     QStringLiteral("lastcue.fx.time_adjust"),
             }));
     EXPECT_EQ(QmlFxMappingLearning::group3ActionIds().size(), 13);
-    EXPECT_EQ(QmlFxMappingLearning::supportedActionIds().size(), 18);
-    const auto key = QmlFxMappingLearning::controlKeyForAction(
-            QStringLiteral("lastcue.fx.target.master"));
-    EXPECT_EQ(key.group, QStringLiteral("[LastCueFX]"));
-    EXPECT_EQ(key.item, QStringLiteral("target_master"));
+    EXPECT_EQ(QmlFxMappingLearning::supportedActionIds().size(), 36);
+}
+
+TEST(QmlFxMappingLearningTest, GeneralActionsRoundTripThroughRealAndBoxControls) {
+    const auto sync = QmlFxMappingLearning::controlKeyForAction(
+            QStringLiteral("lastcue.general.deck1.sync"));
+    EXPECT_EQ(sync, ConfigKey(QStringLiteral("[Channel1]"),
+                            QStringLiteral("sync_enabled")));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForControlKey(sync),
+            QStringLiteral("lastcue.general.deck1.sync"));
+
+    const auto tempoRange = QmlFxMappingLearning::controlKeyForAction(
+            QStringLiteral("lastcue.general.deck2.tempo_range"));
+    EXPECT_EQ(tempoRange, ConfigKey(QStringLiteral("[LastCueGeneral]"),
+                                  QStringLiteral("tempo_range_deck2")));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForControlKey(tempoRange),
+            QStringLiteral("lastcue.general.deck2.tempo_range"));
+
     EXPECT_FALSE(QmlFxMappingLearning::controlKeyForAction(
             QStringLiteral("lastcue.eq.high")).isValid());
+}
+
+TEST(QmlFxMappingLearningTest,
+        RecognizesHighConfidenceNativeScriptBehaviorFingerprints) {
+    const auto scriptMapping = [](unsigned char status,
+                                       unsigned char control,
+                                       const QString& group,
+                                       const QString& item) {
+        return MidiInputMapping(MidiKey(status, control),
+                MidiOptions(MidiOption::Script),
+                ConfigKey(group, item));
+    };
+
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB6,
+                      0x40,
+                      QStringLiteral("[Library]"),
+                      QStringLiteral("PioneerDDJSX.rotarySelector"))),
+            QStringLiteral("lastcue.general.browse.turn"));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0x90,
+                      0x24,
+                      QStringLiteral("[Channel1]"),
+                      QStringLiteral("PioneerDDJSX.parameterLeft"))),
+            QStringLiteral("lastcue.general.deck1.beatjump.backward"));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0x91,
+                      0x60,
+                      QStringLiteral("[Channel2]"),
+                      QStringLiteral("PioneerDDJSX.shiftKeyLockButton"))),
+            QStringLiteral("lastcue.general.deck2.tempo_range"));
+
+    EXPECT_TRUE(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0x90,
+                                                                 0x26,
+                                                                 QStringLiteral("[Channel1]"),
+                                                                 QStringLiteral("PioneerDDJSX.parameterLeft")))
+                    .isEmpty());
 }
 
 TEST(QmlFxMappingLearningTest, Group3ActionsTargetRealEffectSlotControls) {
@@ -31,6 +84,8 @@ TEST(QmlFxMappingLearningTest, Group3ActionsTargetRealEffectSlotControls) {
     EXPECT_EQ(toggle.group,
             QStringLiteral("[EffectRack1_EffectUnit2_Effect3]"));
     EXPECT_EQ(toggle.item, QStringLiteral("enabled"));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForControlKey(toggle),
+            QStringLiteral("lastcue.fx.group.deck2.slot3.toggle"));
 
     const auto adjust = QmlFxMappingLearning::controlKeyForAction(
             QStringLiteral("lastcue.fx.group.deck1.slot2.adjust"));
@@ -39,28 +94,36 @@ TEST(QmlFxMappingLearningTest, Group3ActionsTargetRealEffectSlotControls) {
     EXPECT_EQ(adjust.item, QStringLiteral("meta"));
 }
 
-TEST(QmlFxMappingLearningTest, TimeBindingSeparatesRelativeAndAbsoluteControls) {
+TEST(QmlFxMappingLearningTest, TimeBindingPreservesRelativeAndAbsoluteBehavior) {
     MidiOptions selectKnob;
     selectKnob.setFlag(MidiOption::SelectKnob);
     EXPECT_EQ(QmlFxMappingLearning::controlKeyForTimeBinding(selectKnob),
             ConfigKey(QStringLiteral("[LastCueFX]"),
                     QStringLiteral("time_delta")));
+    EXPECT_EQ(QmlFxMappingLearning::behaviorKindForOptions(selectKnob),
+            QStringLiteral("relative"));
 
     MidiOptions spread64;
     spread64.setFlag(MidiOption::Spread64);
     EXPECT_EQ(QmlFxMappingLearning::controlKeyForTimeBinding(spread64),
             ConfigKey(QStringLiteral("[LastCueFX]"),
                     QStringLiteral("time_delta")));
+    EXPECT_EQ(QmlFxMappingLearning::behaviorKindForOptions(spread64),
+            QStringLiteral("relative"));
 
     EXPECT_EQ(QmlFxMappingLearning::controlKeyForTimeBinding(MidiOptions()),
             ConfigKey(QStringLiteral("[LastCueFX]"),
                     QStringLiteral("time_adjust")));
+    EXPECT_EQ(QmlFxMappingLearning::behaviorKindForOptions(MidiOptions()),
+            QStringLiteral("absolute"));
 
     MidiOptions fourteenBit;
     fourteenBit.setFlag(MidiOption::FourteenBitMSB);
     EXPECT_EQ(QmlFxMappingLearning::controlKeyForTimeBinding(fourteenBit),
             ConfigKey(QStringLiteral("[LastCueFX]"),
                     QStringLiteral("time_adjust")));
+    EXPECT_EQ(QmlFxMappingLearning::behaviorKindForOptions(fourteenBit),
+            QStringLiteral("high-resolution"));
 }
 
 TEST(QmlFxMappingLearningTest, RecommendsNativeGroup3ForSx3Identity) {
@@ -74,6 +137,9 @@ TEST(QmlFxMappingLearningTest, RecommendsNativeGroup3ForSx3Identity) {
     EXPECT_FALSE(QmlFxMappingLearning::isKnownNativeGroup3Controller(
             QStringLiteral("Pioneer DDJ-400"),
             QStringLiteral("Pioneer DDJ-400")));
+    EXPECT_EQ(QmlFxMappingLearning::factoryPresetDisplayName(
+                      QStringLiteral("Pioneer DDJ-SX3 Experimental")),
+            QStringLiteral("Pioneer DDJ-SX3"));
 }
 
 TEST(QmlFxMappingLearningTest, ReadsOnlyAnExplicitDerivedTopologyMarker) {
@@ -84,7 +150,7 @@ TEST(QmlFxMappingLearningTest, ReadsOnlyAnExplicitDerivedTopologyMarker) {
                       QStringLiteral("LastCUE Box FX-LEARN-01 topology=group3 derived mapping.")),
             QStringLiteral("group3"));
     EXPECT_EQ(QmlFxMappingLearning::topologyForMappingDescription(
-                      QStringLiteral("LastCUE Box FX-LEARN-01 topology=single-selected derived mapping.")),
+                      QStringLiteral("LastCUE Box MAP-01 kind=fx topology=single-selected derived mapping.")),
             QStringLiteral("single-selected"));
 }
 
@@ -105,8 +171,10 @@ TEST(QmlFxMappingLearningTest, CollapsesFourteenBitPairIntoOneLogicalBinding) {
     EXPECT_TRUE(logical.value(QStringLiteral("is14Bit")).toBool());
     EXPECT_EQ(logical.value(QStringLiteral("msbControl")).toInt(), 0x10);
     EXPECT_EQ(logical.value(QStringLiteral("lsbControl")).toInt(), 0x30);
+    EXPECT_EQ(logical.value(QStringLiteral("behaviorKind")).toString(),
+            QStringLiteral("high-resolution"));
     EXPECT_EQ(logical.value(QStringLiteral("logicalLabel")).toString(),
-            QStringLiteral("14-BIT CC 16 / 48 CH 3"));
+            QStringLiteral("HIGH RES KNOB · CH 3 · CC 16+48"));
 }
 
 TEST(QmlFxMappingLearningTest, DescribesButtonPairAsOneLogicalBinding) {
@@ -120,8 +188,10 @@ TEST(QmlFxMappingLearningTest, DescribesButtonPairAsOneLogicalBinding) {
     const auto logical =
             QmlFxMappingLearning::describeLogicalBinding(mappings);
     EXPECT_FALSE(logical.value(QStringLiteral("is14Bit")).toBool());
+    EXPECT_EQ(logical.value(QStringLiteral("behaviorKind")).toString(),
+            QStringLiteral("button"));
     EXPECT_EQ(logical.value(QStringLiteral("logicalLabel")).toString(),
-            QStringLiteral("0x90 / 0x41 CH 1"));
+            QStringLiteral("CH 1 · 0x90/0x41"));
 }
 
 } // namespace qml

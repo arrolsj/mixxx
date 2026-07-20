@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QList>
 #include <QMultiHash>
 #include <QPair>
@@ -30,14 +31,22 @@ class QmlFxMappingLearning : public QObject {
     Q_PROPERTY(bool available READ available NOTIFY availabilityChanged)
     Q_PROPERTY(bool sessionActive READ sessionActive NOTIFY sessionChanged)
     Q_PROPERTY(QString state READ state NOTIFY stateChanged)
+    Q_PROPERTY(QString sessionKind READ sessionKind NOTIFY sessionChanged)
+    Q_PROPERTY(int currentActionIndex READ currentActionIndex NOTIFY currentActionChanged)
     Q_PROPERTY(QString currentActionId READ currentActionId NOTIFY currentActionChanged)
     Q_PROPERTY(QVariantMap candidateBinding READ candidateBinding NOTIFY candidateChanged)
+    Q_PROPERTY(bool candidateInherited READ candidateInherited NOTIFY candidateChanged)
     Q_PROPERTY(QString conflictKind READ conflictKind NOTIFY candidateChanged)
     Q_PROPERTY(QString conflictLabel READ conflictLabel NOTIFY candidateChanged)
     Q_PROPERTY(QVariantList currentBindings READ currentBindings NOTIFY bindingsChanged)
+    Q_PROPERTY(QVariantList actionSummaries READ actionSummaries NOTIFY bindingsChanged)
     Q_PROPERTY(QStringList completedActionIds READ completedActionIds NOTIFY progressChanged)
+    Q_PROPERTY(bool hasChanges READ hasChanges NOTIFY progressChanged)
+    Q_PROPERTY(bool canSave READ canSave NOTIFY stateChanged)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorMessageChanged)
     Q_PROPERTY(QString savedMappingPath READ savedMappingPath NOTIFY savedMappingPathChanged)
+    Q_PROPERTY(QVariantList factoryPresets READ factoryPresets NOTIFY presetCatalogChanged)
+    Q_PROPERTY(QVariantList customPresets READ customPresets NOTIFY presetCatalogChanged)
     Q_PROPERTY(QString recommendedTopology READ recommendedTopology NOTIFY topologyRecommendationChanged)
     Q_PROPERTY(QString configuredTopology READ configuredTopology NOTIFY topologyRecommendationChanged)
     Q_PROPERTY(bool nativeGroup3Available READ nativeGroup3Available NOTIFY topologyRecommendationChanged)
@@ -61,10 +70,15 @@ class QmlFxMappingLearning : public QObject {
             UserSettingsPointer pConfig);
 
     static QStringList supportedActionIds();
+    static QStringList generalActionIds();
     static QStringList singleSelectedActionIds();
     static QStringList group3ActionIds();
     static ConfigKey controlKeyForAction(const QString& actionId);
+    static QString actionIdForControlKey(const ConfigKey& key);
+    static QString actionIdForMapping(const MidiInputMapping& mapping);
     static ConfigKey controlKeyForTimeBinding(MidiOptions options);
+    static QString behaviorKindForOptions(MidiOptions options);
+    static QString factoryPresetDisplayName(const QString& mappingName);
     static bool isKnownNativeGroup3Controller(
             const QString& controllerName,
             const QString& mappingName);
@@ -81,9 +95,18 @@ class QmlFxMappingLearning : public QObject {
     QString state() const {
         return m_state;
     }
+    QString sessionKind() const {
+        return m_sessionKind;
+    }
+    int currentActionIndex() const {
+        return m_currentActionIndex;
+    }
     QString currentActionId() const;
     QVariantMap candidateBinding() const {
         return m_candidateBinding;
+    }
+    bool candidateInherited() const {
+        return m_candidateInherited;
     }
     QString conflictKind() const {
         return m_conflictKind;
@@ -92,9 +115,14 @@ class QmlFxMappingLearning : public QObject {
         return m_conflictLabel;
     }
     QVariantList currentBindings() const;
+    QVariantList actionSummaries() const;
     QStringList completedActionIds() const {
         return m_completedActionIds;
     }
+    bool hasChanges() const {
+        return !m_modifiedActionIds.isEmpty();
+    }
+    bool canSave() const;
     QString errorMessage() const {
         return m_errorMessage;
     }
@@ -116,8 +144,16 @@ class QmlFxMappingLearning : public QObject {
     QString mappingLabel() const {
         return m_mappingLabel;
     }
+    QVariantList factoryPresets() const;
+    QVariantList customPresets() const;
 
+    Q_INVOKABLE void beginGeneralLearn();
     Q_INVOKABLE void beginFxLearn(const QVariantList& actionIds);
+    Q_INVOKABLE void setCurrentActionIndex(int index);
+    Q_INVOKABLE void enterReview();
+    Q_INVOKABLE void addMidiForCurrentAction();
+    Q_INVOKABLE void remapCurrentAction();
+    Q_INVOKABLE void finishCurrentAction(bool replaceExistingMapping = false);
     Q_INVOKABLE void acceptCandidate(
             bool replaceExistingMapping,
             bool addAnother);
@@ -126,6 +162,7 @@ class QmlFxMappingLearning : public QObject {
     Q_INVOKABLE void skipCurrentAction();
     Q_INVOKABLE void cancelFxLearn();
     Q_INVOKABLE void saveDerivedFxMapping();
+    Q_INVOKABLE void applyPreset(const QString& path);
 
   signals:
     void availabilityChanged();
@@ -138,6 +175,7 @@ class QmlFxMappingLearning : public QObject {
     void errorMessageChanged();
     void savedMappingPathChanged();
     void topologyRecommendationChanged();
+    void presetCatalogChanged();
 
     void requestStartLearning();
     void requestStopLearning();
@@ -160,12 +198,17 @@ class QmlFxMappingLearning : public QObject {
         QSet<uint16_t> physicalKeys;
     };
 
+    void beginLearnSession(
+            const QString& sessionKind, const QStringList& actionIds);
     void connectController(MidiController* pController);
     void disconnectController();
     void setState(const QString& state);
     void setErrorMessage(const QString& message);
+    void clearCurrentCandidate();
     void clearCandidate();
-    void startCapture();
+    bool showInheritedSuggestion();
+    void showCurrentActionState();
+    void startCapture(bool preserveStagedCandidates = false);
     void advanceAction();
     void rebuildTemporaryMappings();
     void detectCandidateConflicts();
@@ -176,6 +219,19 @@ class QmlFxMappingLearning : public QObject {
     bool conflictsWithAcceptedBinding(
             const MidiInputMappings& mappings,
             QString* pActionId) const;
+    bool conflictsWithWorkingBoxAction(
+            const MidiInputMappings& mappings,
+            QString* pActionId) const;
+    MidiInputMappings mappingsForAction(
+            const QMultiHash<uint16_t, MidiInputMapping>& mappings,
+            const QString& actionId) const;
+    QVariantList describeBindings(const MidiInputMappings& mappings) const;
+    MidiInputMappings candidateMappingsForConfirmation() const;
+    void removeWorkingMappingsForAction(const QString& actionId);
+    void removeAcceptedBindingsForAction(const QString& actionId);
+    void suppressMappings(const MidiInputMappings& mappings);
+    QVariantList presetCatalog(bool custom) const;
+    bool isAllowedPresetPath(const QString& path) const;
     QString derivedMappingPath(QString* pMappingName) const;
     static QSet<uint16_t> physicalKeysForMappings(
             const MidiInputMappings& mappings);
@@ -190,13 +246,20 @@ class QmlFxMappingLearning : public QObject {
     std::shared_ptr<LegacyMidiControllerMapping> m_pWorkingMapping;
     QMultiHash<uint16_t, MidiInputMapping> m_originalInputMappings;
     QList<AcceptedBinding> m_acceptedBindings;
+    QHash<QString, QString> m_actionStatuses;
+    QSet<QString> m_modifiedActionIds;
+    MidiInputMappings m_suppressedMappings;
     QList<QPair<MidiKey, unsigned char>> m_capturedMessages;
     MidiInputMappings m_candidateMappings;
+    MidiInputMappings m_stagedCandidateMappings;
     QStringList m_actionIds;
     QStringList m_completedActionIds;
     int m_currentActionIndex;
     bool m_available;
     bool m_sessionActive;
+    bool m_candidateInherited;
+    bool m_replaceCurrentActionOnAccept;
+    QString m_sessionKind;
     QString m_state;
     QVariantMap m_candidateBinding;
     QString m_conflictKind;
@@ -217,6 +280,9 @@ class QmlFxMappingLearning : public QObject {
     std::unique_ptr<ControlPushButton> m_pTargetMasterControl;
     std::unique_ptr<ControlPotmeter> m_pTimeAdjustControl;
     std::unique_ptr<ControlEncoder> m_pTimeDeltaControl;
+    std::unique_ptr<ControlPushButton> m_pTempoRangeDeck1Control;
+    std::unique_ptr<ControlPushButton> m_pTempoRangeDeck2Control;
+    std::unique_ptr<ControlPotmeter> m_pSuppressedControl;
 };
 
 } // namespace qml
