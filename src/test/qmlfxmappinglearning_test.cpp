@@ -6,7 +6,7 @@ namespace mixxx {
 namespace qml {
 
 TEST(QmlFxMappingLearningTest, ExposesCompactGeneralAndFxActionSets) {
-    EXPECT_EQ(QmlFxMappingLearning::generalActionIds().size(), 18);
+    EXPECT_EQ(QmlFxMappingLearning::generalActionIds().size(), 17);
     EXPECT_EQ(QmlFxMappingLearning::generalActionIds().first(),
             QStringLiteral("lastcue.general.back"));
     EXPECT_EQ(QmlFxMappingLearning::generalActionIds().last(),
@@ -22,7 +22,7 @@ TEST(QmlFxMappingLearningTest, ExposesCompactGeneralAndFxActionSets) {
                     QStringLiteral("lastcue.fx.time_adjust"),
             }));
     EXPECT_EQ(QmlFxMappingLearning::group3ActionIds().size(), 13);
-    EXPECT_EQ(QmlFxMappingLearning::supportedActionIds().size(), 36);
+    EXPECT_EQ(QmlFxMappingLearning::supportedActionIds().size(), 35);
 }
 
 TEST(QmlFxMappingLearningTest, GeneralActionsRoundTripThroughRealAndBoxControls) {
@@ -71,6 +71,37 @@ TEST(QmlFxMappingLearningTest,
                       QStringLiteral("PioneerDDJSX.shiftKeyLockButton"))),
             QStringLiteral("lastcue.general.deck2.tempo_range"));
 
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0x94,
+                      0x47,
+                      QStringLiteral("[EffectRack1_EffectUnit1]"),
+                      QStringLiteral("PioneerDDJSX.effectUnit[1].enableButtons[1].input"))),
+            QStringLiteral("lastcue.fx.group.deck1.slot1.toggle"));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB5,
+                      0x06,
+                      QStringLiteral("[EffectRack1_EffectUnit2]"),
+                      QStringLiteral("PioneerDDJSX.effectUnit[2].knobs[3].inputMSB"))),
+            QStringLiteral("lastcue.fx.group.deck2.slot3.adjust"));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB5,
+                      0x26,
+                      QStringLiteral("[EffectRack1_EffectUnit2]"),
+                      QStringLiteral("PioneerDDJSX.effectUnit[2].knobs[3].inputLSB"))),
+            QStringLiteral("lastcue.fx.group.deck2.slot3.adjust"));
+    EXPECT_EQ(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB4,
+                      0x00,
+                      QStringLiteral("[EffectRack1_EffectUnit1]"),
+                      QStringLiteral("PioneerDDJSX.effectUnit[1].dryWetKnob.input"))),
+            QStringLiteral("lastcue.fx.time_adjust"));
+
+    EXPECT_TRUE(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB5,
+                                                                 0x16,
+                                                                 QStringLiteral("[EffectRack1_EffectUnit2]"),
+                                                                 QStringLiteral("PioneerDDJSX.effectUnit[2].knobs[3].inputMSB")))
+                    .isEmpty());
+    EXPECT_TRUE(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB4,
+                                                                 0x10,
+                                                                 QStringLiteral("[EffectRack1_EffectUnit1]"),
+                                                                 QStringLiteral("PioneerDDJSX.effectUnit[1].dryWetKnob.input")))
+                    .isEmpty());
     EXPECT_TRUE(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0x90,
                                                                  0x26,
                                                                  QStringLiteral("[Channel1]"),

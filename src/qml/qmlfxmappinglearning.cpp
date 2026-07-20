@@ -350,6 +350,56 @@ QString QmlFxMappingLearning::actionIdForMapping(
     if (*pKey == ConfigKey(QStringLiteral("[Library]"), QStringLiteral("PioneerDDJSX.rotarySelectorClick"))) {
         return QStringLiteral("lastcue.general.browse.press");
     }
+    static const QRegularExpression sx3EffectUnitPattern(
+            QStringLiteral("^\\[EffectRack1_EffectUnit([12])\\]$"));
+    const auto effectUnitMatch = sx3EffectUnitPattern.match(pKey->group);
+    if (effectUnitMatch.hasMatch()) {
+        const int unit = effectUnitMatch.captured(1).toInt();
+        const unsigned char noteStatus =
+                static_cast<unsigned char>(0x93 + unit);
+        const unsigned char controlStatus =
+                static_cast<unsigned char>(0xB3 + unit);
+        const auto groupAction = [unit](int slot, const QString& suffix) {
+            return QStringLiteral("lastcue.fx.group.deck%1.slot%2.%3")
+                    .arg(unit)
+                    .arg(slot)
+                    .arg(suffix);
+        };
+
+        for (int slot = 1; slot <= 3; ++slot) {
+            const QString buttonKey =
+                    QStringLiteral("PioneerDDJSX.effectUnit[%1].enableButtons[%2].input")
+                            .arg(unit)
+                            .arg(slot);
+            if (pKey->item == buttonKey &&
+                    mapping.key.status == noteStatus &&
+                    mapping.key.control == 0x46 + slot) {
+                return groupAction(slot, QStringLiteral("toggle"));
+            }
+
+            const QString knobPrefix =
+                    QStringLiteral("PioneerDDJSX.effectUnit[%1].knobs[%2].input")
+                            .arg(unit)
+                            .arg(slot);
+            const int metaControl = slot * 2;
+            if (mapping.key.status == controlStatus &&
+                    ((pKey->item == knobPrefix + QStringLiteral("MSB") &&
+                             mapping.key.control == metaControl) ||
+                            (pKey->item == knobPrefix + QStringLiteral("LSB") &&
+                                    mapping.key.control == metaControl + 0x20))) {
+                return groupAction(slot, QStringLiteral("adjust"));
+            }
+        }
+
+        const QString dryWetKey =
+                QStringLiteral("PioneerDDJSX.effectUnit[%1].dryWetKnob.input")
+                        .arg(unit);
+        if (pKey->item == dryWetKey &&
+                mapping.key.status == controlStatus &&
+                mapping.key.control == 0x00) {
+            return QStringLiteral("lastcue.fx.time_adjust");
+        }
+    }
     int deck = 0;
     if (pKey->group == QStringLiteral("[Channel1]")) {
         deck = 1;
