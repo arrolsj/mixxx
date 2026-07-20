@@ -10,6 +10,11 @@
 
 class MidiOutputHandler;
 class MidiController;
+namespace mixxx {
+namespace qml {
+class QmlFxMappingLearning;
+}
+} // namespace mixxx
 
 class MidiInputHandleJSProxy final : public QObject {
     Q_OBJECT
@@ -120,6 +125,7 @@ class MidiController : public Controller {
     friend class MidiOutputHandler;
     friend class MidiControllerTest;
     friend class MidiControllerJSProxy;
+    friend class mixxx::qml::QmlFxMappingLearning;
 
     // MIDI learning assistant
     friend class DlgControllerLearning;

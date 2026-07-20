@@ -9,6 +9,7 @@
 #include "qml/qmlconfigproxy.h"
 #include "qml/qmlcontrollerstatus.h"
 #include "qml/qmlcontrolproxy.h"
+#include "qml/qmlfxmappinglearning.h"
 #include "qml/qmldlgpreferencesproxy.h"
 #include "qml/qmleffectmanifestparametersmodel.h"
 #include "qml/qmleffectslotproxy.h"
@@ -77,6 +78,9 @@ QmlApplication::QmlApplication(
     QmlConfigProxy::registerUserSettings(pCoreServices->getSettings());
     QmlControllerStatus::registerControllerManager(
             pCoreServices->getControllerManager().get());
+    QmlFxMappingLearning::registerDependencies(
+            pCoreServices->getControllerManager().get(),
+            pCoreServices->getSettings());
     QmlLibraryProxy::registerLibrary(pCoreServices->getLibrary());
 
     loadQml(m_mainFilePath);
@@ -95,6 +99,7 @@ QmlApplication::~QmlApplication() {
     QmlPlayerManagerProxy::registerPlayerManager(nullptr);
     QmlConfigProxy::registerUserSettings(nullptr);
     QmlControllerStatus::registerControllerManager(nullptr);
+    QmlFxMappingLearning::registerDependencies(nullptr, nullptr);
     QmlLibraryProxy::registerLibrary(nullptr);
     QmlDlgPreferencesProxy::s_pInstance->deleteLater();
 }

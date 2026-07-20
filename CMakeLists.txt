@@ -2256,6 +2256,7 @@ if(BUILD_TESTING)
       src-mixxx-test
       src/test/qmlbeatsmodel_test.cpp
       src/test/qmlcontrollerstatus_test.cpp
+      src/test/qmlfxmappinglearning_test.cpp
       src/test/qmllibrarytracklistmodel_test.cpp
     )
   endif()
@@ -3019,6 +3020,7 @@ if(QML)
     src/qml/qmlcontrolproxy.cpp
     src/qml/qmlconfigproxy.cpp
     src/qml/qmlcontrollerstatus.cpp
+    src/qml/qmlfxmappinglearning.cpp
     src/qml/qmldlgpreferencesproxy.cpp
     src/qml/qmleffectmanifestparametersmodel.cpp
     src/qml/qmleffectsmanagerproxy.cpp
