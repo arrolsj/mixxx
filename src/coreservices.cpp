@@ -33,6 +33,7 @@
 #include "soundio/soundmanager.h"
 #include "sources/soundsourceproxy.h"
 #include "util/clipboard.h"
+#include "util/cmdlineargs.h"
 #include "util/db/dbconnectionpooled.h"
 #include "util/font.h"
 #include "util/logger.h"
@@ -586,7 +587,17 @@ void CoreServices::initialize(QApplication* pApp) {
 
     bool musicDirAdded = false;
 
-    if (m_pTrackCollectionManager->internalCollection()->loadRootDirs().isEmpty()) {
+#ifdef MIXXX_USE_QML
+    const bool externalQmlOwnsEmptyLibraryFlow =
+            !m_cmdlineArgs.getQmlEntryPath().isEmpty();
+#else
+    constexpr bool externalQmlOwnsEmptyLibraryFlow = false;
+#endif
+    // An external QML shell owns its empty-media flow and cannot depend on a
+    // startup QWidget dialog. Preserve the existing prompt for all legacy and
+    // built-in entry points.
+    if (!externalQmlOwnsEmptyLibraryFlow &&
+            m_pTrackCollectionManager->internalCollection()->loadRootDirs().isEmpty()) {
         // TODO(XXX) this needs to be smarter, we can't distinguish between an empty
         // path return value (not sure if this is normally possible, but it is
         // possible with the Windows 7 "Music" library, which is what
