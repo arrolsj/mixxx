@@ -820,6 +820,9 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/effects/backends/builtin/biquadfullkilleqeffect.cpp
   src/effects/backends/builtin/bitcrushereffect.cpp
   src/effects/backends/builtin/builtinbackend.cpp
+  src/effects/backends/builtin/colorcrusheffect.cpp
+  src/effects/backends/builtin/colordubechoeffect.cpp
+  src/effects/backends/builtin/colornoiseeffect.cpp
   src/effects/backends/builtin/distortioneffect.cpp
   src/effects/backends/builtin/echoeffect.cpp
   src/effects/backends/builtin/filtereffect.cpp

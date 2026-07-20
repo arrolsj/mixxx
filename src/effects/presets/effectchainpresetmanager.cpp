@@ -6,6 +6,9 @@
 #include <QMessageBox>
 
 #include "effects/backends/builtin/biquadfullkilleqeffect.h"
+#include "effects/backends/builtin/colorcrusheffect.h"
+#include "effects/backends/builtin/colordubechoeffect.h"
+#include "effects/backends/builtin/colornoiseeffect.h"
 #include "effects/backends/builtin/filtereffect.h"
 #include "effects/backends/effectmanifest.h"
 #include "effects/effectchain.h"
@@ -799,6 +802,36 @@ EffectsXmlData EffectChainPresetManager::readEffectsXml(
 
     if (m_quickEffectChainPresetsSorted.empty()) {
         generateDefaultQuickEffectPresets();
+    }
+
+    // LastCUE's Color FX selector addresses these effects by ID. Existing
+    // profiles already have a persisted QuickEffect order, so the usual
+    // first-run generation above would otherwise never add newly introduced
+    // effects. Add only the missing single-effect presets and preserve the
+    // user's existing presets and ordering.
+    const QList<QString> requiredColorEffectIds{
+            ColorDubEchoEffect::getId(),
+            ColorNoiseEffect::getId(),
+            ColorCrushEffect::getId(),
+    };
+    for (const auto& effectId : requiredColorEffectIds) {
+        const auto pManifest =
+                m_pBackendManager->getManifest(effectId, EffectBackendType::BuiltIn);
+        VERIFY_OR_DEBUG_ASSERT(pManifest) {
+            continue;
+        }
+        const QString presetName = pManifest->displayName();
+        auto pPreset = m_effectChainPresets.value(presetName);
+        if (!pPreset) {
+            pPreset = EffectChainPresetPointer::create(pManifest);
+            pPreset->setName(presetName);
+            m_effectChainPresets.insert(presetName, pPreset);
+            m_effectChainPresetsSorted.append(pPreset);
+            savePresetXml(pPreset);
+        }
+        if (!m_quickEffectChainPresetsSorted.contains(pPreset)) {
+            m_quickEffectChainPresetsSorted.append(pPreset);
+        }
     }
 
     prependRemainingPresetsToLists();

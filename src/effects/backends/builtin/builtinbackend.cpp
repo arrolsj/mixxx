@@ -6,6 +6,9 @@
 #include "effects/backends/builtin/bessel8lvmixeqeffect.h"
 #include "effects/backends/builtin/biquadfullkilleqeffect.h"
 #include "effects/backends/builtin/bitcrushereffect.h"
+#include "effects/backends/builtin/colorcrusheffect.h"
+#include "effects/backends/builtin/colordubechoeffect.h"
+#include "effects/backends/builtin/colornoiseeffect.h"
 #include "effects/backends/builtin/filtereffect.h"
 #include "effects/backends/builtin/flangereffect.h"
 #include "effects/backends/builtin/graphiceqeffect.h"
@@ -48,6 +51,9 @@ BuiltInBackend::BuiltInBackend() {
     registerEffect<BitCrusherEffect>();
     registerEffect<WhiteNoiseEffect>();
     registerEffect<BalanceEffect>();
+    registerEffect<ColorCrushEffect>();
+    registerEffect<ColorDubEchoEffect>();
+    registerEffect<ColorNoiseEffect>();
     // Fancy effects
     registerEffect<FlangerEffect>();
     registerEffect<EchoEffect>();
