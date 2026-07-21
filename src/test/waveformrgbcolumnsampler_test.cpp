@@ -1,10 +1,10 @@
+#include "waveform/renderers/waveformrgbcolumnsampler.h"
+
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cstddef>
 #include <vector>
-
-#include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace mixxx::waveform {
 namespace {
@@ -270,7 +270,7 @@ TEST(WaveformRgbColumnSamplerTest,
 }
 
 TEST(WaveformRgbColumnSamplerTest,
-        RekordboxThreeBandUsesPeakPreservingRmsForBothSides) {
+        RekordboxThreeBandUsesSourceMeanForBothSides) {
     const std::vector<RekordboxThreeBandColumn> source{
             {.mid = 20, .high = 30, .low = 10},
             {.mid = 70, .high = 50, .low = 90},
@@ -286,20 +286,33 @@ TEST(WaveformRgbColumnSamplerTest,
     const auto columns = sampleRekordboxThreeBandColumns(source, viewport);
 
     ASSERT_EQ(1U, columns.size());
-    EXPECT_FLOAT_EQ(
-            peakPreservingRms(10.0 * 10.0 + 90.0 * 90.0, 90.0f, 2),
-            columns[0].leftLow);
+    EXPECT_FLOAT_EQ(50.0f, columns[0].leftLow);
     EXPECT_FLOAT_EQ(columns[0].leftLow, columns[0].rightLow);
-    EXPECT_FLOAT_EQ(
-            peakPreservingRms(20.0 * 20.0 + 70.0 * 70.0, 70.0f, 2),
-            columns[0].leftMid);
+    EXPECT_FLOAT_EQ(45.0f, columns[0].leftMid);
     EXPECT_FLOAT_EQ(columns[0].leftMid, columns[0].rightMid);
-    EXPECT_FLOAT_EQ(
-            peakPreservingRms(30.0 * 30.0 + 50.0 * 50.0, 50.0f, 2),
-            columns[0].leftHigh);
+    EXPECT_FLOAT_EQ(40.0f, columns[0].leftHigh);
     EXPECT_FLOAT_EQ(columns[0].leftHigh, columns[0].rightHigh);
-    EXPECT_LT(columns[0].leftLow, 90.0f);
-    EXPECT_GT(columns[0].leftLow, 65.0f);
+}
+
+TEST(WaveformRgbColumnSamplerTest,
+        RekordboxSourceMeanKeepsImpulseInOnePhysicalColumn) {
+    std::vector<RekordboxThreeBandColumn> source(8);
+    source[3] = {.mid = 120, .high = 60, .low = 200};
+
+    WaveformRgbViewportMetrics viewport;
+    viewport.physicalWidth = 4;
+    viewport.visualFrameCount = 8;
+    viewport.firstGlobalPixel = 0;
+    viewport.visualFramesPerPhysicalPixel = 2.0;
+
+    const auto columns = sampleRekordboxThreeBandColumns(source, viewport);
+
+    ASSERT_EQ(4U, columns.size());
+    EXPECT_FLOAT_EQ(0.0f, columns[1].leftLow);
+    EXPECT_FLOAT_EQ(100.0f, columns[2].leftLow);
+    EXPECT_FLOAT_EQ(60.0f, columns[2].leftMid);
+    EXPECT_FLOAT_EQ(30.0f, columns[2].leftHigh);
+    EXPECT_FLOAT_EQ(0.0f, columns[3].leftLow);
 }
 
 TEST(WaveformRgbColumnSamplerTest,
@@ -307,28 +320,199 @@ TEST(WaveformRgbColumnSamplerTest,
     std::vector<RekordboxThreeBandColumn> source(100);
     for (std::size_t index = 0; index < source.size(); ++index) {
         source[index].mid = index < 80 ? 20 : (index < 99 ? 100 : 255);
+        source[index].high = 255;
+        source[index].low = 200;
     }
 
-    EXPECT_FLOAT_EQ(100.0f, calculateRekordboxThreeBandReference(source));
+    const WaveformThreeBandReference reference =
+            calculateRekordboxThreeBandReference(source);
+    EXPECT_FLOAT_EQ(200.0f, reference.low);
+    EXPECT_FLOAT_EQ(100.0f, reference.mid);
+    EXPECT_FLOAT_EQ(255.0f, reference.high);
 
     const std::vector<RekordboxThreeBandColumn> quiet{
             {.mid = 20, .high = 10, .low = 5},
     };
-    EXPECT_FLOAT_EQ(kMinimumRekordboxThreeBandReference,
-            calculateRekordboxThreeBandReference(quiet));
+    const WaveformThreeBandReference quietReference =
+            calculateRekordboxThreeBandReference(quiet);
+    EXPECT_FLOAT_EQ(kMinimumRekordboxThreeBandReference, quietReference.low);
+    EXPECT_FLOAT_EQ(kMinimumRekordboxThreeBandReference, quietReference.mid);
+    EXPECT_FLOAT_EQ(kMinimumRekordboxThreeBandReference, quietReference.high);
 }
 
 TEST(WaveformRgbColumnSamplerTest,
-        ThreeBandTransferSuppressesOrdinaryEnergyAndKeepsPeakHeadroom) {
-    const float ordinary = threeBandDisplayAmplitude(50.0f, 100.0f);
-    const float robustPeak = threeBandDisplayAmplitude(100.0f, 100.0f);
-    const float transient = threeBandDisplayAmplitude(200.0f, 100.0f);
+        ThreeBandTransferKeepsProfilesAndBandsIndependent) {
+    constexpr auto detail = WaveformThreeBandDisplayProfile::RekordboxDetail;
+    constexpr auto preview = WaveformThreeBandDisplayProfile::RekordboxPreview;
+    constexpr auto fallback = WaveformThreeBandDisplayProfile::MixxxFallback;
+    constexpr WaveformThreeBandReference reference{
+            .low = 100.0f,
+            .mid = 100.0f,
+            .high = 100.0f,
+    };
 
-    EXPECT_FLOAT_EQ(0.0f, threeBandDisplayAmplitude(0.0f, 100.0f));
-    EXPECT_LT(ordinary, robustPeak);
-    EXPECT_LT(robustPeak, transient);
-    EXPECT_LT(transient, kThreeBandDisplayHeightScale);
-    EXPECT_NEAR(0.606f, robustPeak, 0.001f);
+    EXPECT_FLOAT_EQ(0.0f,
+            threeBandDisplayAmplitude(
+                    0.0f, reference, WaveformThreeBandBand::Low, detail));
+    EXPECT_NEAR(0.435275f,
+            threeBandDisplayAmplitude(
+                    50.0f, reference, WaveformThreeBandBand::Low, detail),
+            1e-6f);
+    EXPECT_NEAR(0.208932f,
+            threeBandDisplayAmplitude(
+                    50.0f, reference, WaveformThreeBandBand::Mid, detail),
+            1e-6f);
+    EXPECT_NEAR(0.104466f,
+            threeBandDisplayAmplitude(
+                    50.0f, reference, WaveformThreeBandBand::High, detail),
+            1e-6f);
+    EXPECT_FLOAT_EQ(0.245f,
+            threeBandDisplayAmplitude(
+                    50.0f, reference, WaveformThreeBandBand::Low, preview));
+    EXPECT_FLOAT_EQ(0.09f,
+            threeBandDisplayAmplitude(
+                    50.0f, reference, WaveformThreeBandBand::High, fallback));
+    EXPECT_FLOAT_EQ(kThreeBandDisplayHeightScale,
+            threeBandDisplayAmplitude(255.0f,
+                    {.low = 1.0f, .mid = 1.0f, .high = 1.0f},
+                    WaveformThreeBandBand::Low,
+                    detail));
+
+    const WaveformThreeBandReference representative{
+            .low = 60.0f,
+            .mid = 110.0f,
+            .high = 110.0f,
+    };
+    const float low = threeBandDisplayAmplitude(
+            5.0f, representative, WaveformThreeBandBand::Low, detail);
+    const float mid = threeBandDisplayAmplitude(
+            40.0f, representative, WaveformThreeBandBand::Mid, detail);
+    const float high = threeBandDisplayAmplitude(
+            25.0f, representative, WaveformThreeBandBand::High, detail);
+    EXPECT_GT(low, mid);
+    EXPECT_GT(mid, high);
+}
+
+TEST(WaveformRgbColumnSamplerTest,
+        RekordboxPreviewStackUsesCumulativeBandBoundaries) {
+    const RekordboxThreeBandColumn source{
+            .mid = 50,
+            .high = 40,
+            .low = 20,
+    };
+    const auto stack = calculateRekordboxThreeBandPreviewStack(source);
+
+    EXPECT_NEAR(20.0f / 255.0f * 0.49f, stack.low, 1e-6f);
+    EXPECT_NEAR(stack.low + 50.0f / 255.0f * 0.32f, stack.mid, 1e-6f);
+    EXPECT_NEAR(stack.mid + 40.0f / 255.0f * 0.25f, stack.high, 1e-6f);
+    EXPECT_LT(stack.low, stack.mid);
+    EXPECT_LT(stack.mid, stack.high);
+}
+
+TEST(WaveformRgbColumnSamplerTest,
+        ThreeBandEnvelopeConnectsAdjacentColumnsWithOneSegmentOverhead) {
+    const std::vector<WaveformThreeBandColumn> columns{
+            {},
+            {.leftLow = 100.0f, .rightLow = 50.0f},
+            {},
+    };
+    const auto edges = buildWaveformThreeBandEnvelopeEdges(columns,
+            100.0f,
+            1.0,
+            {.low = 100.0f, .mid = 100.0f, .high = 100.0f},
+            WaveformThreeBandDisplayProfile::RekordboxDetail,
+            1.0f,
+            1.0f,
+            1.0f);
+
+    ASSERT_EQ(columns.size() + 2, edges.size());
+    EXPECT_EQ(columns.size() + 1, edges.size() - 1);
+    EXPECT_FLOAT_EQ(-0.5f, edges[0].x);
+    EXPECT_FLOAT_EQ(0.0f, edges[1].x);
+    EXPECT_FLOAT_EQ(1.0f, edges[2].x);
+    EXPECT_FLOAT_EQ(2.0f, edges[3].x);
+    EXPECT_FLOAT_EQ(2.5f, edges[4].x);
+    EXPECT_FLOAT_EQ(100.0f, edges[1].low.top);
+    EXPECT_FLOAT_EQ(50.0f, edges[2].low.top);
+    EXPECT_NEAR(143.5275f, edges[2].low.bottom, 1e-4f);
+    EXPECT_FLOAT_EQ(100.0f, edges[3].low.top);
+}
+
+TEST(WaveformRgbColumnSamplerTest,
+        RekordboxPreviewEnvelopeUsesCumulativeBoundaries) {
+    const std::vector<WaveformThreeBandColumn> columns{
+            {.leftLow = 20.0f,
+                    .rightLow = 20.0f,
+                    .leftMid = 50.0f,
+                    .rightMid = 50.0f,
+                    .leftHigh = 40.0f,
+                    .rightHigh = 40.0f},
+    };
+    const auto stack = calculateRekordboxThreeBandPreviewStack(
+            {.mid = 50, .high = 40, .low = 20});
+    const auto edges = buildWaveformThreeBandEnvelopeEdges(columns,
+            100.0f,
+            1.0,
+            {.low = 32.0f, .mid = 32.0f, .high = 32.0f},
+            WaveformThreeBandDisplayProfile::RekordboxPreview,
+            1.0f,
+            1.0f,
+            1.0f);
+
+    ASSERT_EQ(2U, edges.size());
+    EXPECT_NEAR(100.0f - stack.low * 100.0f, edges[0].low.top, 1e-5f);
+    EXPECT_NEAR(100.0f - stack.mid * 100.0f, edges[0].mid.top, 1e-5f);
+    EXPECT_NEAR(100.0f - stack.high * 100.0f, edges[0].high.top, 1e-5f);
+    EXPECT_LT(edges[0].high.top, edges[0].mid.top);
+    EXPECT_LT(edges[0].mid.top, edges[0].low.top);
+}
+
+TEST(WaveformRgbColumnSamplerTest,
+        ThreeBandEnvelopeHandlesSingleColumnDprAndExtremeGain) {
+    const std::vector<WaveformThreeBandColumn> columns{
+            {.leftLow = 255.0f, .rightLow = 255.0f},
+    };
+    const auto edges = buildWaveformThreeBandEnvelopeEdges(columns,
+            50.0f,
+            2.0,
+            {.low = 64.0f, .mid = 64.0f, .high = 64.0f},
+            WaveformThreeBandDisplayProfile::RekordboxDetail,
+            10.0f,
+            1.0f,
+            1.0f);
+
+    ASSERT_EQ(2U, edges.size());
+    EXPECT_FLOAT_EQ(-0.25f, edges[0].x);
+    EXPECT_FLOAT_EQ(0.25f, edges[1].x);
+    for (const auto& edge : edges) {
+        EXPECT_FLOAT_EQ(2.5f, edge.low.top);
+        EXPECT_FLOAT_EQ(97.5f, edge.low.bottom);
+    }
+}
+
+TEST(WaveformRgbColumnSamplerTest,
+        ThreeBandSamplerNeverReadsBeyondCompletedStereoPrefix) {
+    auto data = makeWaveformData(4);
+    for (WaveformData& value : data) {
+        value.filtered.low = 200;
+        value.filtered.mid = 100;
+        value.filtered.high = 50;
+    }
+    WaveformRgbViewportMetrics viewport;
+    viewport.physicalWidth = 2;
+    viewport.visualFrameCount = 4;
+    viewport.firstGlobalPixel = 0;
+    viewport.visualFramesPerPhysicalPixel = 1.0;
+
+    const auto columns = sampleWaveformThreeBandColumns(
+            data.data(), static_cast<int>(data.size()), 2, viewport);
+
+    ASSERT_EQ(2U, columns.size());
+    EXPECT_GT(columns[0].leftLow, 0.0f);
+    EXPECT_GT(columns[0].rightHigh, 0.0f);
+    EXPECT_FLOAT_EQ(0.0f, columns[1].leftLow);
+    EXPECT_FLOAT_EQ(0.0f, columns[1].rightMid);
+    EXPECT_FLOAT_EQ(0.0f, columns[1].rightHigh);
 }
 
 } // namespace

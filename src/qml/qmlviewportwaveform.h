@@ -45,7 +45,6 @@ class QmlViewportWaveform : public QQuickItem {
     };
     Q_ENUM(Renderer)
 
-
     QmlPlayerProxy* player() const;
     void setPlayer(QmlPlayerProxy* pPlayer);
 
@@ -77,7 +76,6 @@ class QmlViewportWaveform : public QQuickItem {
     void setMidGain(double gain);
     double lowGain() const;
     void setLowGain(double gain);
-
 
   signals:
     void playerChanged();
@@ -124,9 +122,7 @@ class QmlViewportWaveform : public QQuickItem {
     double m_rateRatio{1.0};
     waveform::RekordboxThreeBandWaveformsPointer
             m_pRekordboxThreeBandWaveforms;
-    float m_rekordboxPreviewReference{
-            waveform::kMixxxThreeBandReference};
-    float m_rekordboxDetailReference{
+    waveform::WaveformThreeBandReference m_rekordboxDetailReference{
             waveform::kMixxxThreeBandReference};
     double m_playMarkerPosition{0.5};
     QColor m_axesColor{Qt::white};

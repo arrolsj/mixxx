@@ -8,10 +8,10 @@
 
 #include "qml/qmlplayerproxy.h"
 #include "track/track.h"
+#include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace mixxx {
 namespace qml {
-
 
 class QmlWaveformOverview : public QQuickPaintedItem {
     Q_OBJECT
@@ -104,7 +104,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
             Channels channels,
             const mixxx::waveform::RekordboxThreeBandColumn& column,
             double offsetX,
-            float reference) const;
+            const mixxx::waveform::WaveformThreeBandReference& reference,
+            bool previewProfile) const;
 
     QPointer<QmlPlayerProxy> m_pPlayer;
     TrackPointer m_pCurrentTrack;
@@ -115,8 +116,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     QColor m_colorLow;
     mixxx::waveform::RekordboxThreeBandWaveformsPointer
             m_pRekordboxThreeBandWaveforms;
-    float m_rekordboxPreviewReference{255.0f};
-    float m_rekordboxDetailReference{255.0f};
+    mixxx::waveform::WaveformThreeBandReference m_rekordboxDetailReference{
+            mixxx::waveform::kMixxxThreeBandReference};
     double m_highGain{1.0};
     double m_midGain{1.0};
     double m_lowGain{1.0};

@@ -4,7 +4,6 @@
 #include <QSGGeometry>
 #include <QSGGeometryNode>
 #include <QSGVertexColorMaterial>
-
 #include <algorithm>
 #include <cmath>
 
@@ -22,6 +21,40 @@ uchar colorByte(float component) {
             std::clamp(std::lround(component * 255.0f), 0L, 255L));
 }
 
+uchar premultipliedColorByte(uchar component, uchar alpha) {
+    return static_cast<uchar>(
+            (static_cast<unsigned int>(component) * alpha + 127) / 255);
+}
+
+void addTrapezoid(QSGGeometry::ColoredPoint2D* pVertices,
+        int* pVertexIndex,
+        float left,
+        float leftTop,
+        float right,
+        float rightTop,
+        float leftBottom,
+        float rightBottom,
+        uchar red,
+        uchar green,
+        uchar blue,
+        uchar alpha) {
+    const uchar premultipliedRed = premultipliedColorByte(red, alpha);
+    const uchar premultipliedGreen = premultipliedColorByte(green, alpha);
+    const uchar premultipliedBlue = premultipliedColorByte(blue, alpha);
+    pVertices[(*pVertexIndex)++].set(
+            left, leftTop, premultipliedRed, premultipliedGreen, premultipliedBlue, alpha);
+    pVertices[(*pVertexIndex)++].set(
+            right, rightTop, premultipliedRed, premultipliedGreen, premultipliedBlue, alpha);
+    pVertices[(*pVertexIndex)++].set(
+            left, leftBottom, premultipliedRed, premultipliedGreen, premultipliedBlue, alpha);
+    pVertices[(*pVertexIndex)++].set(
+            left, leftBottom, premultipliedRed, premultipliedGreen, premultipliedBlue, alpha);
+    pVertices[(*pVertexIndex)++].set(
+            right, rightTop, premultipliedRed, premultipliedGreen, premultipliedBlue, alpha);
+    pVertices[(*pVertexIndex)++].set(
+            right, rightBottom, premultipliedRed, premultipliedGreen, premultipliedBlue, alpha);
+}
+
 void addRectangle(QSGGeometry::ColoredPoint2D* pVertices,
         int* pVertexIndex,
         float left,
@@ -32,12 +65,18 @@ void addRectangle(QSGGeometry::ColoredPoint2D* pVertices,
         uchar green,
         uchar blue,
         uchar alpha) {
-    pVertices[(*pVertexIndex)++].set(left, top, red, green, blue, alpha);
-    pVertices[(*pVertexIndex)++].set(right, top, red, green, blue, alpha);
-    pVertices[(*pVertexIndex)++].set(left, bottom, red, green, blue, alpha);
-    pVertices[(*pVertexIndex)++].set(left, bottom, red, green, blue, alpha);
-    pVertices[(*pVertexIndex)++].set(right, top, red, green, blue, alpha);
-    pVertices[(*pVertexIndex)++].set(right, bottom, red, green, blue, alpha);
+    addTrapezoid(pVertices,
+            pVertexIndex,
+            left,
+            top,
+            right,
+            top,
+            bottom,
+            bottom,
+            red,
+            green,
+            blue,
+            alpha);
 }
 
 mixxx::waveform::WaveformRgbColorF toColorF(const QColor& color) {
@@ -48,8 +87,10 @@ mixxx::waveform::WaveformRgbColorF toColorF(const QColor& color) {
     };
 }
 
-constexpr uchar kLowBandAlpha = 230;
-constexpr uchar kMidBandAlpha = 218;
+// Screenshot-calibrated opacity. With premultiplied vertex colors these map
+// the flat blue/orange peaks to approximately V=.745/.721 on black.
+constexpr uchar kLowBandAlpha = 190;
+constexpr uchar kMidBandAlpha = 193;
 constexpr uchar kHighBandAlpha = 242;
 
 } // namespace
@@ -267,7 +308,6 @@ void QmlViewportWaveform::setLowGain(double gain) {
     update();
 }
 
-
 double QmlViewportWaveform::trackWidth() const {
     return m_viewportMetrics.trackWidth;
 }
@@ -318,10 +358,6 @@ void QmlViewportWaveform::slotWaveformUpdated() {
     m_pRekordboxThreeBandWaveforms = m_pCurrentTrack != nullptr
             ? m_pCurrentTrack->getRekordboxThreeBandWaveforms()
             : waveform::RekordboxThreeBandWaveformsPointer{};
-    m_rekordboxPreviewReference = m_pRekordboxThreeBandWaveforms
-            ? waveform::calculateRekordboxThreeBandReference(
-                      m_pRekordboxThreeBandWaveforms->preview)
-            : waveform::kMixxxThreeBandReference;
     m_rekordboxDetailReference = m_pRekordboxThreeBandWaveforms
             ? waveform::calculateRekordboxThreeBandReference(
                       m_pRekordboxThreeBandWaveforms->detail)
@@ -402,7 +438,10 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
     std::vector<waveform::WaveformRgbColumn> rgbColumns;
     std::vector<waveform::WaveformThreeBandColumn> threeBandColumns;
     const bool renderThreeBand = m_renderer == Renderer::ThreeBand;
-    float threeBandReference = waveform::kMixxxThreeBandReference;
+    waveform::WaveformThreeBandReference threeBandReference =
+            waveform::kMixxxThreeBandReference;
+    waveform::WaveformThreeBandDisplayProfile threeBandProfile =
+            waveform::WaveformThreeBandDisplayProfile::MixxxFallback;
     if (renderThreeBand) {
         const waveform::RekordboxThreeBandWaveformsPointer pRekordbox =
                 m_pRekordboxThreeBandWaveforms;
@@ -411,9 +450,12 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
             const auto& source = useDetail
                     ? pRekordbox->detail
                     : pRekordbox->preview;
+            threeBandProfile = useDetail
+                    ? waveform::WaveformThreeBandDisplayProfile::RekordboxDetail
+                    : waveform::WaveformThreeBandDisplayProfile::RekordboxPreview;
             threeBandReference = useDetail
                     ? m_rekordboxDetailReference
-                    : m_rekordboxPreviewReference;
+                    : waveform::kMixxxThreeBandReference;
             threeBandColumns = waveform::sampleRekordboxThreeBandColumns(
                     source, viewport);
         } else {
@@ -438,6 +480,19 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
         return nullptr;
     }
 
+    const float halfHeight = static_cast<float>(height() / 2.0);
+    const std::vector<waveform::WaveformThreeBandEnvelopeEdge>
+            threeBandEdges = renderThreeBand
+            ? waveform::buildWaveformThreeBandEnvelopeEdges(threeBandColumns,
+                      halfHeight,
+                      m_devicePixelRatio,
+                      threeBandReference,
+                      threeBandProfile,
+                      static_cast<float>(m_lowGain),
+                      static_cast<float>(m_midGain),
+                      static_cast<float>(m_highGain))
+            : std::vector<waveform::WaveformThreeBandEnvelopeEdge>{};
+
     auto* pNode = static_cast<QSGGeometryNode*>(pOldNode);
     if (pNode == nullptr) {
         pNode = new QSGGeometryNode();
@@ -453,8 +508,10 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
 
     QSGGeometry* pGeometry = pNode->geometry();
     constexpr int kVerticesPerRectangle = 6;
+    const int threeBandSegmentCount = std::max(
+            static_cast<int>(threeBandEdges.size()) - 1, 0);
     const int vertexCount = kVerticesPerRectangle *
-            (columnCount * (renderThreeBand ? 3 : 1) + 1);
+            ((renderThreeBand ? threeBandSegmentCount * 3 : columnCount) + 1);
     if (pGeometry->vertexCount() != vertexCount) {
         pGeometry->allocate(vertexCount);
     }
@@ -464,7 +521,6 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
     int vertexIndex = 0;
     const float logicalWidth = static_cast<float>(
             viewport.physicalWidth / m_devicePixelRatio);
-    const float halfHeight = static_cast<float>(height() / 2.0);
     addRectangle(pVertices,
             &vertexIndex,
             0.0f,
@@ -499,55 +555,64 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                     255);
         }
     } else {
-        for (int columnIndex = 0;
-                columnIndex < columnCount;
-                ++columnIndex) {
-            const waveform::WaveformThreeBandColumn& column =
-                    threeBandColumns[static_cast<std::size_t>(columnIndex)];
-            const float centerX =
-                    static_cast<float>(columnIndex / m_devicePixelRatio);
-            const auto appendBand = [&](const QColor& color,
-                                            uchar alpha,
-                                            float gain,
-                                            float leftAmplitude,
-                                            float rightAmplitude) {
-                addRectangle(pVertices,
+        const auto appendBand = [&](const QColor& color,
+                                        uchar alpha,
+                                        auto pBandRange) {
+            for (std::size_t edgeIndex = 0;
+                    edgeIndex + 1 < threeBandEdges.size();
+                    ++edgeIndex) {
+                const waveform::WaveformThreeBandEnvelopeEdge& left =
+                        threeBandEdges[edgeIndex];
+                const waveform::WaveformThreeBandEnvelopeEdge& right =
+                        threeBandEdges[edgeIndex + 1];
+                const waveform::WaveformThreeBandEnvelopeRange& leftRange =
+                        left.*pBandRange;
+                const waveform::WaveformThreeBandEnvelopeRange& rightRange =
+                        right.*pBandRange;
+                addTrapezoid(pVertices,
                         &vertexIndex,
-                        centerX - halfPhysicalPixel,
-                        halfHeight - halfHeight *
-                                waveform::threeBandDisplayAmplitude(
-                                        leftAmplitude, threeBandReference) *
-                                gain,
-                        centerX + halfPhysicalPixel,
-                        halfHeight + halfHeight *
-                                waveform::threeBandDisplayAmplitude(
-                                        rightAmplitude, threeBandReference) *
-                                gain,
+                        left.x,
+                        leftRange.top,
+                        right.x,
+                        rightRange.top,
+                        leftRange.bottom,
+                        rightRange.bottom,
                         static_cast<uchar>(color.red()),
                         static_cast<uchar>(color.green()),
                         static_cast<uchar>(color.blue()),
                         alpha);
             };
-            // Rekordbox composes all bands on one center axis. Low and mid
-            // blend into brown; high is nearly opaque and is painted last.
-            appendBand(m_lowColor,
-                    kLowBandAlpha,
-                    static_cast<float>(m_lowGain),
-                    column.leftLow,
-                    column.rightLow);
-            appendBand(m_midColor,
-                    kMidBandAlpha,
-                    static_cast<float>(m_midGain),
-                    column.leftMid,
-                    column.rightMid);
+        };
+        // PWV6 preview boundaries are cumulative, so drawing the largest
+        // layer first reveals a stacked high/mid/low waveform. PWV7 detail
+        // and Mixxx-filtered data share one axis and keep high painted last.
+        if (threeBandProfile ==
+                waveform::WaveformThreeBandDisplayProfile::RekordboxPreview) {
             appendBand(m_highColor,
                     kHighBandAlpha,
-                    static_cast<float>(m_highGain),
-                    column.leftHigh,
-                    column.rightHigh);
+                    &waveform::WaveformThreeBandEnvelopeEdge::high);
+            appendBand(m_midColor,
+                    kMidBandAlpha,
+                    &waveform::WaveformThreeBandEnvelopeEdge::mid);
+            appendBand(m_lowColor,
+                    kLowBandAlpha,
+                    &waveform::WaveformThreeBandEnvelopeEdge::low);
+        } else {
+            // Adjacent source columns share each edge. The one-pixel ramps
+            // remove staircase seams without spreading an onset farther.
+            appendBand(m_lowColor,
+                    kLowBandAlpha,
+                    &waveform::WaveformThreeBandEnvelopeEdge::low);
+            appendBand(m_midColor,
+                    kMidBandAlpha,
+                    &waveform::WaveformThreeBandEnvelopeEdge::mid);
+            appendBand(m_highColor,
+                    kHighBandAlpha,
+                    &waveform::WaveformThreeBandEnvelopeEdge::high);
         }
     }
 
+    Q_ASSERT(vertexIndex == vertexCount);
     pGeometry->markVertexDataDirty();
     pNode->markDirty(QSGNode::DirtyGeometry);
     return pNode;

@@ -32,50 +32,192 @@ struct WaveformThreeBandColumn {
     float rightHigh{0.0f};
 };
 
-/// PWV7 uses a nonlinear display scale. Keep the transfer independent from
-/// viewport columns: a whole-track robust reference preserves the source
-/// dynamics, while this curve suppresses ordinary energy and leaves headroom
-/// for transients above the 99th percentile.
-constexpr float kThreeBandDisplayHeightScale = 0.78f;
-constexpr float kThreeBandDisplayCurveStrength = 1.5f;
-constexpr float kMixxxThreeBandReference = 255.0f;
-constexpr float kMinimumRekordboxThreeBandReference = 64.0f;
+enum class WaveformThreeBandBand {
+    Low,
+    Mid,
+    High,
+};
 
-inline float calculateRekordboxThreeBandReference(
+enum class WaveformThreeBandDisplayProfile {
+    MixxxFallback,
+    RekordboxPreview,
+    RekordboxDetail,
+};
+
+struct WaveformThreeBandReference {
+    float low{255.0f};
+    float mid{255.0f};
+    float high{255.0f};
+};
+
+struct WaveformThreeBandPreviewStack {
+    float low{0.0f};
+    float mid{0.0f};
+    float high{0.0f};
+};
+
+struct WaveformThreeBandEnvelopeRange {
+    float top{0.0f};
+    float bottom{0.0f};
+};
+
+struct WaveformThreeBandEnvelopeEdge {
+    float x{0.0f};
+    WaveformThreeBandEnvelopeRange low;
+    WaveformThreeBandEnvelopeRange mid;
+    WaveformThreeBandEnvelopeRange high;
+};
+
+constexpr float kThreeBandDisplayHeightScale = 0.95f;
+constexpr WaveformThreeBandReference kMixxxThreeBandReference{};
+constexpr float kMinimumRekordboxThreeBandReference = 32.0f;
+
+inline WaveformThreeBandReference calculateRekordboxThreeBandReference(
         const std::vector<RekordboxThreeBandColumn>& source) {
     if (source.empty()) {
         return kMixxxThreeBandReference;
     }
 
-    std::array<std::size_t, 256> histogram{};
+    std::array<std::size_t, 256> lowHistogram{};
+    std::array<std::size_t, 256> midHistogram{};
+    std::array<std::size_t, 256> highHistogram{};
     for (const RekordboxThreeBandColumn& column : source) {
-        ++histogram[std::max({column.low, column.mid, column.high})];
+        // PWV6/PWV7 store independently scaled M/H/L bytes. A shared
+        // reference makes the sparse low byte disappear, so each band gets
+        // its own robust whole-track anchor.
+        ++lowHistogram[column.low];
+        ++midHistogram[column.mid];
+        ++highHistogram[column.high];
     }
 
     constexpr double kRobustPercentile = 0.99;
     const std::size_t target = std::max<std::size_t>(
-            1, static_cast<std::size_t>(
-                       std::ceil(source.size() * kRobustPercentile)));
-    std::size_t cumulative = 0;
-    for (std::size_t value = 0; value < histogram.size(); ++value) {
-        cumulative += histogram[value];
-        if (cumulative >= target) {
-            return std::clamp(static_cast<float>(value),
-                    kMinimumRekordboxThreeBandReference,
-                    kMixxxThreeBandReference);
+            1, static_cast<std::size_t>(std::ceil(source.size() * kRobustPercentile)));
+    const auto robustReference = [target](
+                                         const std::array<std::size_t, 256>& histogram) {
+        std::size_t cumulative = 0;
+        for (std::size_t value = 0; value < histogram.size(); ++value) {
+            cumulative += histogram[value];
+            if (cumulative >= target) {
+                return std::clamp(static_cast<float>(value),
+                        kMinimumRekordboxThreeBandReference,
+                        255.0f);
+            }
         }
-    }
-    return kMixxxThreeBandReference;
+        return 255.0f;
+    };
+    return {
+            robustReference(lowHistogram),
+            robustReference(midHistogram),
+            robustReference(highHistogram),
+    };
 }
 
-inline float threeBandDisplayAmplitude(float value, float reference) {
+inline float threeBandDisplayScale(WaveformThreeBandBand band,
+        WaveformThreeBandDisplayProfile profile) {
+    switch (profile) {
+    case WaveformThreeBandDisplayProfile::RekordboxPreview:
+        // PWV6 is conventionally rendered as a cumulative preview. These
+        // public reverse-engineered component weights are kept separate from
+        // the PWV7 detail profile.
+        switch (band) {
+        case WaveformThreeBandBand::Low:
+            return 0.49f;
+        case WaveformThreeBandBand::Mid:
+            return 0.32f;
+        case WaveformThreeBandBand::High:
+            return 0.25f;
+        }
+        break;
+    case WaveformThreeBandDisplayProfile::RekordboxDetail:
+        // Public PWV7 implementations confirm that the native bytes need
+        // band-specific display scaling, but do not perfectly match rekordbox.
+        // These ratios are calibrated against corresponding rekordbox pixels
+        // and public .2EX fixtures; they are display weights, not crossovers.
+        switch (band) {
+        case WaveformThreeBandBand::Low:
+            return 0.50f;
+        case WaveformThreeBandBand::Mid:
+            return 0.24f;
+        case WaveformThreeBandBand::High:
+            return 0.12f;
+        }
+        break;
+    case WaveformThreeBandDisplayProfile::MixxxFallback:
+        // Mixxx analysis uses actual filter magnitudes, but the high band is
+        // perceptually dense. Keep it slightly stronger than native PWV7
+        // without letting it mask the low-frequency envelope.
+        switch (band) {
+        case WaveformThreeBandBand::Low:
+            return 1.0f;
+        case WaveformThreeBandBand::Mid:
+            return 0.75f;
+        case WaveformThreeBandBand::High:
+            return 0.18f;
+        }
+        break;
+    }
+    return 0.0f;
+}
+
+inline float threeBandDisplayPower(
+        WaveformThreeBandDisplayProfile profile) {
+    // PWV7's visible scale is strongly concave. A fifth-root transfer retains
+    // exact onset positions while restoring low-band presence among its many
+    // small native byte values. Preview and Mixxx-filtered data keep their
+    // linear semantics.
+    return profile == WaveformThreeBandDisplayProfile::RekordboxDetail
+            ? 0.20f
+            : 1.0f;
+}
+
+inline float threeBandReferenceForBand(
+        const WaveformThreeBandReference& reference,
+        WaveformThreeBandBand band) {
+    switch (band) {
+    case WaveformThreeBandBand::Low:
+        return reference.low;
+    case WaveformThreeBandBand::Mid:
+        return reference.mid;
+    case WaveformThreeBandBand::High:
+        return reference.high;
+    }
+    return 255.0f;
+}
+
+inline float threeBandDisplayAmplitude(float value,
+        const WaveformThreeBandReference& reference,
+        WaveformThreeBandBand band,
+        WaveformThreeBandDisplayProfile profile) {
     if (value <= 0.0f) {
         return 0.0f;
     }
-    const float normalized = value / std::max(reference, 1.0f);
-    return kThreeBandDisplayHeightScale *
-            (1.0f - std::exp(-kThreeBandDisplayCurveStrength *
-                    normalized * normalized));
+    const float normalizedEnergy =
+            value / std::max(threeBandReferenceForBand(reference, band), 1.0f);
+    const float normalized = std::pow(
+                                     normalizedEnergy,
+                                     threeBandDisplayPower(profile)) *
+            threeBandDisplayScale(band, profile);
+    return std::clamp(normalized, 0.0f, kThreeBandDisplayHeightScale);
+}
+
+inline WaveformThreeBandPreviewStack calculateRekordboxThreeBandPreviewStack(
+        const RekordboxThreeBandColumn& column) {
+    // PWV6 bytes are already encoded for the fixed public preview weights.
+    // Unlike PWV7 detail, normalizing each band to its own track percentile
+    // would destroy the native M/H/L relationship before stacking.
+    constexpr WaveformThreeBandReference reference =
+            kMixxxThreeBandReference;
+    WaveformThreeBandPreviewStack stack;
+    stack.low = threeBandDisplayAmplitude(column.low,
+            reference,
+            WaveformThreeBandBand::Low,
+            WaveformThreeBandDisplayProfile::RekordboxPreview);
+    stack.mid = std::min(kThreeBandDisplayHeightScale,
+            stack.low + threeBandDisplayAmplitude(column.mid, reference, WaveformThreeBandBand::Mid, WaveformThreeBandDisplayProfile::RekordboxPreview));
+    stack.high = std::min(kThreeBandDisplayHeightScale,
+            stack.mid + threeBandDisplayAmplitude(column.high, reference, WaveformThreeBandBand::High, WaveformThreeBandDisplayProfile::RekordboxPreview));
+    return stack;
 }
 
 inline float peakPreservingRms(
@@ -88,7 +230,6 @@ inline float peakPreservingRms(
     constexpr float kPeakContribution = 0.35f;
     return rms + kPeakContribution * (maximum - rms);
 }
-
 
 /// Immutable mapping between a bounded viewport and the global waveform pixel
 /// grid. The global integer pixel index is what makes waveform columns stable:
@@ -365,33 +506,24 @@ sampleRekordboxThreeBandColumns(
                                 visualFrameStop * sourcePerVisualFrame))),
                 source.size());
 
-        double lowSquareSum = 0.0;
-        double midSquareSum = 0.0;
-        double highSquareSum = 0.0;
-        float lowMaximum = 0.0f;
-        float midMaximum = 0.0f;
-        float highMaximum = 0.0f;
+        double lowSum = 0.0;
+        double midSum = 0.0;
+        double highSum = 0.0;
         for (std::size_t sourceIndex = sourceStart;
                 sourceIndex < sourceStop;
                 ++sourceIndex) {
             const RekordboxThreeBandColumn& value = source[sourceIndex];
-            const float low = value.low;
-            const float mid = value.mid;
-            const float high = value.high;
-            lowSquareSum += low * low;
-            midSquareSum += mid * mid;
-            highSquareSum += high * high;
-            lowMaximum = std::max(lowMaximum, low);
-            midMaximum = std::max(midMaximum, mid);
-            highMaximum = std::max(highMaximum, high);
+            lowSum += value.low;
+            midSum += value.mid;
+            highSum += value.high;
         }
         const std::size_t sampleCount = sourceStop - sourceStart;
-        const float low = peakPreservingRms(
-                lowSquareSum, lowMaximum, sampleCount);
-        const float mid = peakPreservingRms(
-                midSquareSum, midMaximum, sampleCount);
-        const float high = peakPreservingRms(
-                highSquareSum, highMaximum, sampleCount);
+        const float low =
+                static_cast<float>(lowSum / static_cast<double>(sampleCount));
+        const float mid =
+                static_cast<float>(midSum / static_cast<double>(sampleCount));
+        const float high =
+                static_cast<float>(highSum / static_cast<double>(sampleCount));
 
         WaveformThreeBandColumn& column =
                 columns[static_cast<std::size_t>(columnIndex)];
@@ -400,6 +532,115 @@ sampleRekordboxThreeBandColumns(
         column.leftHigh = column.rightHigh = high;
     }
     return columns;
+}
+
+inline std::vector<WaveformThreeBandEnvelopeEdge>
+buildWaveformThreeBandEnvelopeEdges(
+        const std::vector<WaveformThreeBandColumn>& columns,
+        float halfHeight,
+        double devicePixelRatio,
+        const WaveformThreeBandReference& reference,
+        WaveformThreeBandDisplayProfile profile,
+        float lowGain,
+        float midGain,
+        float highGain) {
+    if (columns.empty() || halfHeight <= 0.0f) {
+        return {};
+    }
+
+    const float dpr = static_cast<float>(
+            std::max(devicePixelRatio, 0.01));
+    const float halfPhysicalPixel = 0.5f / dpr;
+    const auto displayHeight = [&](float value,
+                                       WaveformThreeBandBand band,
+                                       float gain) {
+        const WaveformThreeBandReference& displayReference =
+                profile == WaveformThreeBandDisplayProfile::RekordboxPreview
+                ? kMixxxThreeBandReference
+                : reference;
+        return std::min(kThreeBandDisplayHeightScale,
+                threeBandDisplayAmplitude(
+                        value, displayReference, band, profile) *
+                        std::max(gain, 0.0f));
+    };
+    const auto bandRange = [&](const WaveformThreeBandColumn& column,
+                                   WaveformThreeBandBand band,
+                                   float gain) {
+        float left = 0.0f;
+        float right = 0.0f;
+        switch (band) {
+        case WaveformThreeBandBand::Low:
+            left = column.leftLow;
+            right = column.rightLow;
+            break;
+        case WaveformThreeBandBand::Mid:
+            left = column.leftMid;
+            right = column.rightMid;
+            break;
+        case WaveformThreeBandBand::High:
+            left = column.leftHigh;
+            right = column.rightHigh;
+            break;
+        }
+        const float leftHeight = displayHeight(left, band, gain);
+        const float rightHeight = displayHeight(right, band, gain);
+        return WaveformThreeBandEnvelopeRange{
+                halfHeight - halfHeight * leftHeight,
+                halfHeight + halfHeight * rightHeight};
+    };
+    const auto previewStack = [&](float low, float mid, float high) {
+        WaveformThreeBandPreviewStack stack;
+        stack.low = displayHeight(
+                low, WaveformThreeBandBand::Low, lowGain);
+        stack.mid = std::min(kThreeBandDisplayHeightScale,
+                stack.low + displayHeight(mid, WaveformThreeBandBand::Mid, midGain));
+        stack.high = std::min(kThreeBandDisplayHeightScale,
+                stack.mid + displayHeight(high, WaveformThreeBandBand::High, highGain));
+        return stack;
+    };
+    const auto makeEdge = [&](float x,
+                                  const WaveformThreeBandColumn& column) {
+        if (profile ==
+                WaveformThreeBandDisplayProfile::RekordboxPreview) {
+            const WaveformThreeBandPreviewStack left = previewStack(
+                    column.leftLow, column.leftMid, column.leftHigh);
+            const WaveformThreeBandPreviewStack right = previewStack(
+                    column.rightLow, column.rightMid, column.rightHigh);
+            const auto stackedRange = [&](float leftHeight,
+                                              float rightHeight) {
+                return WaveformThreeBandEnvelopeRange{
+                        halfHeight - halfHeight * leftHeight,
+                        halfHeight + halfHeight * rightHeight};
+            };
+            return WaveformThreeBandEnvelopeEdge{
+                    x,
+                    stackedRange(left.low, right.low),
+                    stackedRange(left.mid, right.mid),
+                    stackedRange(left.high, right.high)};
+        }
+        return WaveformThreeBandEnvelopeEdge{
+                x,
+                bandRange(column, WaveformThreeBandBand::Low, lowGain),
+                bandRange(column, WaveformThreeBandBand::Mid, midGain),
+                bandRange(column, WaveformThreeBandBand::High, highGain)};
+    };
+
+    std::vector<WaveformThreeBandEnvelopeEdge> edges;
+    edges.reserve(columns.size() + 2);
+    edges.push_back(makeEdge(-halfPhysicalPixel, columns.front()));
+    if (columns.size() == 1) {
+        edges.push_back(makeEdge(halfPhysicalPixel, columns.front()));
+        return edges;
+    }
+    for (std::size_t index = 0; index < columns.size(); ++index) {
+        edges.push_back(makeEdge(
+                static_cast<float>(index) / dpr, columns[index]));
+    }
+    edges.push_back(makeEdge(
+            static_cast<float>(columns.size() - 1) / dpr +
+                    halfPhysicalPixel,
+            columns.back()));
+    return edges;
 }
 
 } // namespace mixxx::waveform

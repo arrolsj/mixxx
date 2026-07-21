@@ -3,13 +3,13 @@
 #include <algorithm>
 
 #include "mixer/basetrackplayer.h"
-#include "waveform/renderers/waveformrgbcolumnsampler.h"
 #include "moc_qmlwaveformoverview.cpp"
+#include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace {
 constexpr double kDesiredChannelHeight = 255;
-constexpr int kLowBandAlpha = 230;
-constexpr int kMidBandAlpha = 218;
+constexpr int kLowBandAlpha = 190;
+constexpr int kMidBandAlpha = 193;
 constexpr int kHighBandAlpha = 242;
 
 QColor withAlpha(const QColor& color, int alpha) {
@@ -181,7 +181,6 @@ void QmlWaveformOverview::setLowGain(double gain) {
     update();
 }
 
-
 void QmlWaveformOverview::slotTrackLoaded(TrackPointer pTrack) {
     // TODO: Investigate if it's a bug that this debug assertion fails when
     // passing tracks on the command line
@@ -226,10 +225,6 @@ void QmlWaveformOverview::slotWaveformUpdated() {
     m_pRekordboxThreeBandWaveforms = m_pCurrentTrack != nullptr
             ? m_pCurrentTrack->getRekordboxThreeBandWaveforms()
             : mixxx::waveform::RekordboxThreeBandWaveformsPointer{};
-    m_rekordboxPreviewReference = m_pRekordboxThreeBandWaveforms
-            ? mixxx::waveform::calculateRekordboxThreeBandReference(
-                      m_pRekordboxThreeBandWaveforms->preview)
-            : mixxx::waveform::kMixxxThreeBandReference;
     m_rekordboxDetailReference = m_pRekordboxThreeBandWaveforms
             ? mixxx::waveform::calculateRekordboxThreeBandReference(
                       m_pRekordboxThreeBandWaveforms->detail)
@@ -247,15 +242,17 @@ void QmlWaveformOverview::paint(QPainter* pPainter) {
             m_pRekordboxThreeBandWaveforms;
     const std::vector<mixxx::waveform::RekordboxThreeBandColumn>*
             pRekordboxColumns = nullptr;
-    float rekordboxReference = mixxx::waveform::kMixxxThreeBandReference;
+    mixxx::waveform::WaveformThreeBandReference rekordboxReference =
+            mixxx::waveform::kMixxxThreeBandReference;
+    bool useRekordboxPreview = false;
     if (m_renderer == Renderer::ThreeBand && pRekordbox &&
             !pRekordbox->empty()) {
-        const bool usePreview = !pRekordbox->preview.empty();
-        pRekordboxColumns = usePreview
+        useRekordboxPreview = !pRekordbox->preview.empty();
+        pRekordboxColumns = useRekordboxPreview
                 ? &pRekordbox->preview
                 : &pRekordbox->detail;
-        rekordboxReference = usePreview
-                ? m_rekordboxPreviewReference
+        rekordboxReference = useRekordboxPreview
+                ? mixxx::waveform::kMixxxThreeBandReference
                 : m_rekordboxDetailReference;
     }
     ConstWaveformPointer pWaveform = pTrack->getWaveformSummary();
@@ -320,7 +317,8 @@ void QmlWaveformOverview::paint(QPainter* pPainter) {
                     channels,
                     (*pRekordboxColumns)[index],
                     static_cast<double>(index),
-                    rekordboxReference);
+                    rekordboxReference,
+                    useRekordboxPreview);
         }
         pPainter->restore();
         return;
@@ -372,28 +370,35 @@ void QmlWaveformOverview::drawFiltered(QPainter* pPainter,
         ConstWaveformPointer pWaveform,
         int completion) const {
     const double offsetX = completion / 2.0;
-    const auto displayAmplitude = [](std::uint8_t value) {
+    const auto displayAmplitude = [](std::uint8_t value,
+                                          mixxx::waveform::WaveformThreeBandBand band) {
         return mixxx::waveform::threeBandDisplayAmplitude(
-                value, mixxx::waveform::kMixxxThreeBandReference);
+                value,
+                mixxx::waveform::kMixxxThreeBandReference,
+                band,
+                mixxx::waveform::WaveformThreeBandDisplayProfile::MixxxFallback);
     };
 
     if (channels.testFlag(ChannelFlag::LeftChannel)) {
         pPainter->setPen(withAlpha(m_colorLow, kLowBandAlpha));
         pPainter->drawLine(QPointF(offsetX,
                                    -displayAmplitude(
-                                           pWaveform->getLow(completion)) *
+                                           pWaveform->getLow(completion),
+                                           mixxx::waveform::WaveformThreeBandBand::Low) *
                                            m_lowGain),
                 QPointF(offsetX, 0.0));
         pPainter->setPen(withAlpha(m_colorMid, kMidBandAlpha));
         pPainter->drawLine(QPointF(offsetX,
                                    -displayAmplitude(
-                                           pWaveform->getMid(completion)) *
+                                           pWaveform->getMid(completion),
+                                           mixxx::waveform::WaveformThreeBandBand::Mid) *
                                            m_midGain),
                 QPointF(offsetX, 0.0));
         pPainter->setPen(withAlpha(m_colorHigh, kHighBandAlpha));
         pPainter->drawLine(QPointF(offsetX,
                                    -displayAmplitude(
-                                           pWaveform->getHigh(completion)) *
+                                           pWaveform->getHigh(completion),
+                                           mixxx::waveform::WaveformThreeBandBand::High) *
                                            m_highGain),
                 QPointF(offsetX, 0.0));
     }
@@ -402,17 +407,20 @@ void QmlWaveformOverview::drawFiltered(QPainter* pPainter,
         pPainter->setPen(withAlpha(m_colorLow, kLowBandAlpha));
         pPainter->drawLine(QPointF(offsetX, 0.0),
                 QPointF(offsetX,
-                        displayAmplitude(pWaveform->getLow(completion + 1)) *
+                        displayAmplitude(pWaveform->getLow(completion + 1),
+                                mixxx::waveform::WaveformThreeBandBand::Low) *
                                 m_lowGain));
         pPainter->setPen(withAlpha(m_colorMid, kMidBandAlpha));
         pPainter->drawLine(QPointF(offsetX, 0.0),
                 QPointF(offsetX,
-                        displayAmplitude(pWaveform->getMid(completion + 1)) *
+                        displayAmplitude(pWaveform->getMid(completion + 1),
+                                mixxx::waveform::WaveformThreeBandBand::Mid) *
                                 m_midGain));
         pPainter->setPen(withAlpha(m_colorHigh, kHighBandAlpha));
         pPainter->drawLine(QPointF(offsetX, 0.0),
                 QPointF(offsetX,
-                        displayAmplitude(pWaveform->getHigh(completion + 1)) *
+                        displayAmplitude(pWaveform->getHigh(completion + 1),
+                                mixxx::waveform::WaveformThreeBandBand::High) *
                                 m_highGain));
     }
 }
@@ -422,15 +430,66 @@ void QmlWaveformOverview::drawRekordboxThreeBand(
         Channels channels,
         const mixxx::waveform::RekordboxThreeBandColumn& column,
         double offsetX,
-        float reference) const {
-    const double lowHeight =
-            mixxx::waveform::threeBandDisplayAmplitude(column.low, reference) *
+        const mixxx::waveform::WaveformThreeBandReference& reference,
+        bool previewProfile) const {
+    if (previewProfile) {
+        const mixxx::waveform::WaveformThreeBandPreviewStack stack =
+                mixxx::waveform::calculateRekordboxThreeBandPreviewStack(
+                        column);
+        const double lowHeight = std::min<double>(
+                mixxx::waveform::kThreeBandDisplayHeightScale,
+                stack.low * m_lowGain);
+        const double midHeight = std::min<double>(
+                mixxx::waveform::kThreeBandDisplayHeightScale,
+                lowHeight + (stack.mid - stack.low) * m_midGain);
+        const double highHeight = std::min<double>(
+                mixxx::waveform::kThreeBandDisplayHeightScale,
+                midHeight + (stack.high - stack.mid) * m_highGain);
+
+        if (channels.testFlag(ChannelFlag::LeftChannel)) {
+            pPainter->setPen(withAlpha(m_colorLow, kLowBandAlpha));
+            pPainter->drawLine(
+                    QPointF(offsetX, 0.0), QPointF(offsetX, -lowHeight));
+            pPainter->setPen(withAlpha(m_colorMid, kMidBandAlpha));
+            pPainter->drawLine(
+                    QPointF(offsetX, -lowHeight), QPointF(offsetX, -midHeight));
+            pPainter->setPen(withAlpha(m_colorHigh, kHighBandAlpha));
+            pPainter->drawLine(
+                    QPointF(offsetX, -midHeight), QPointF(offsetX, -highHeight));
+        }
+        if (channels.testFlag(ChannelFlag::RightChannel)) {
+            pPainter->setPen(withAlpha(m_colorLow, kLowBandAlpha));
+            pPainter->drawLine(
+                    QPointF(offsetX, 0.0), QPointF(offsetX, lowHeight));
+            pPainter->setPen(withAlpha(m_colorMid, kMidBandAlpha));
+            pPainter->drawLine(
+                    QPointF(offsetX, lowHeight), QPointF(offsetX, midHeight));
+            pPainter->setPen(withAlpha(m_colorHigh, kHighBandAlpha));
+            pPainter->drawLine(
+                    QPointF(offsetX, midHeight), QPointF(offsetX, highHeight));
+        }
+        return;
+    }
+
+    constexpr auto profile =
+            mixxx::waveform::WaveformThreeBandDisplayProfile::RekordboxDetail;
+    const double lowHeight = mixxx::waveform::threeBandDisplayAmplitude(
+                                     column.low,
+                                     reference,
+                                     mixxx::waveform::WaveformThreeBandBand::Low,
+                                     profile) *
             m_lowGain;
-    const double midHeight =
-            mixxx::waveform::threeBandDisplayAmplitude(column.mid, reference) *
+    const double midHeight = mixxx::waveform::threeBandDisplayAmplitude(
+                                     column.mid,
+                                     reference,
+                                     mixxx::waveform::WaveformThreeBandBand::Mid,
+                                     profile) *
             m_midGain;
-    const double highHeight =
-            mixxx::waveform::threeBandDisplayAmplitude(column.high, reference) *
+    const double highHeight = mixxx::waveform::threeBandDisplayAmplitude(
+                                      column.high,
+                                      reference,
+                                      mixxx::waveform::WaveformThreeBandBand::High,
+                                      profile) *
             m_highGain;
 
     if (channels.testFlag(ChannelFlag::LeftChannel)) {
