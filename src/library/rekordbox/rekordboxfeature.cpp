@@ -276,6 +276,25 @@ struct memory_cue_t {
     mixxx::RgbColor::optional_t color;
 };
 
+void addOrUpdateMemoryCue(QList<memory_cue_t>* pMemoryCues,
+        mixxx::audio::FramePos startPosition,
+        const QString& comment,
+        mixxx::RgbColor::optional_t color) {
+    for (auto& memoryCue : *pMemoryCues) {
+        if (memoryCue.startPosition != startPosition) {
+            continue;
+        }
+        if (!comment.isEmpty()) {
+            memoryCue.comment = comment;
+        }
+        if (color) {
+            memoryCue.color = color;
+        }
+        return;
+    }
+    pMemoryCues->append({startPosition, comment, color});
+}
+
 bool createLibraryTable(QSqlDatabase& database, const QString& tableName) {
     qDebug() << "Creating Rekordbox library table: " << tableName;
 
@@ -1191,10 +1210,10 @@ void readAnalyze(TrackPointer track,
                 case rekordbox_anlz_t::CUE_LIST_TYPE_MEMORY_CUES: {
                     switch (cueEntry->type()) {
                     case rekordbox_anlz_t::CUE_ENTRY_TYPE_MEMORY_CUE: {
-                        memory_cue_t memoryCue;
-                        memoryCue.startPosition = position;
-                        memoryCue.color = mixxx::RgbColor::nullopt();
-                        memoryCues << memoryCue;
+                        addOrUpdateMemoryCue(&memoryCues,
+                                position,
+                                QString(),
+                                mixxx::RgbColor::nullopt());
                     } break;
                     case rekordbox_anlz_t::CUE_ENTRY_TYPE_LOOP:
                         // Memory loops are deliberately excluded.
@@ -1251,13 +1270,11 @@ void readAnalyze(TrackPointer track,
                 case rekordbox_anlz_t::CUE_LIST_TYPE_MEMORY_CUES: {
                     switch (cueExtendedEntry->type()) {
                     case rekordbox_anlz_t::CUE_ENTRY_TYPE_MEMORY_CUE: {
-                        memory_cue_t memoryCue;
-                        memoryCue.startPosition = position;
-                        memoryCue.comment =
-                                fromUtf16BeString(cueExtendedEntry->comment());
-                        memoryCue.color = cueColorFromID(static_cast<int>(
-                                cueExtendedEntry->color_id()));
-                        memoryCues << memoryCue;
+                        addOrUpdateMemoryCue(&memoryCues,
+                                position,
+                                fromUtf16BeString(cueExtendedEntry->comment()),
+                                cueColorFromID(static_cast<int>(
+                                        cueExtendedEntry->color_id())));
                     } break;
                     case rekordbox_anlz_t::CUE_ENTRY_TYPE_LOOP:
                         // Memory loops are deliberately excluded.
@@ -1304,6 +1321,12 @@ void readAnalyze(TrackPointer track,
         }
     }
 
+    if (ignoreCues) {
+        return;
+    }
+
+    track->removeCuesOfType(mixxx::CueType::MemoryCue);
+
     if (!memoryCues.isEmpty()) {
         std::sort(memoryCues.begin(),
                 memoryCues.end(),
@@ -1318,6 +1341,8 @@ void readAnalyze(TrackPointer track,
                     memoryCue.color);
         }
     }
+    qDebug() << "Imported" << memoryCues.size()
+             << "Rekordbox memory cues for:" << track->getTitle();
 }
 
 } // anonymous namespace
