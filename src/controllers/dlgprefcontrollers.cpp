@@ -40,6 +40,11 @@ DlgPrefControllers::DlgPrefControllers(DlgPreferences* pPreferences,
 
     // Connections
     connect(m_pControllerManager.get(),
+            &ControllerManager::devicesAboutToChange,
+            this,
+            &DlgPrefControllers::destroyControllerWidgets,
+            Qt::BlockingQueuedConnection);
+    connect(m_pControllerManager.get(),
             &ControllerManager::devicesChanged,
             this,
             &DlgPrefControllers::rescanControllers);

@@ -150,6 +150,12 @@ class Controller : public QObject {
     // Requests that the device poll if it is a polling device. Returns true
     // if events were handled.
     virtual bool poll() { return false; }
+    // Returns true after the backend reports that an opened device has been
+    // physically removed. ControllerManager uses this to rebuild the device
+    // list without restarting Mixxx.
+    virtual bool hasDisconnected() const {
+        return false;
+    }
 
     // Returns true if this device should receive polling signals via calls to
     // its poll() method.

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <QFutureWatcher>
+
 #include <QHash>
 #include <QList>
 #include <QObject>
 #include <QSharedPointer>
 #include <QString>
+#include <QTimer>
 
 #include "audio/types.h"
 #include "control/pollingcontrolproxy.h"
@@ -106,13 +109,20 @@ class SoundManager : public QObject {
 
     void processUnderflowHappened(SINT framesPerBuffer);
 
+  public slots:
+    void scheduleAudioRecoveryForController(const QString& controllerName);
+
   signals:
+    void controllerAudioRecoveryFinished(const QString& controllerName, bool audioRecovered);
     void devicesUpdated(); // emitted when pointers to SoundDevices go stale
     void devicesSetup(); // emitted when the sound devices have been set up
     void outputRegistered(const AudioOutput& output, AudioSource* src);
     void inputRegistered(const AudioInput& input, AudioDestination* dest);
 
   private:
+    void slotAttemptAudioRecovery();
+    void slotAudioRecoveryProbeFinished();
+
     // Closes all the devices and empties the list of devices we have.
     void clearDeviceList(bool sleepAfterClosing);
 
@@ -148,4 +158,9 @@ class SoundManager : public QObject {
     int m_underflowUpdateCount;
     PollingControlProxy m_audioLatencyOverloadCount;
     PollingControlProxy m_audioLatencyOverload;
+    QTimer m_audioRecoveryTimer;
+    QString m_audioRecoveryControllerName;
+    int m_audioRecoveryAttempt{0};
+    QFutureWatcher<bool> m_audioRecoveryProbeWatcher;
+    bool m_audioRecoveryProbeSucceeded{false};
 };

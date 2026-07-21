@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMutex>
+#include <QSet>
 #include <QSharedPointer>
 #include <QTimer>
 #include <memory>
@@ -48,13 +49,17 @@ class ControllerManager : public QObject {
     static QList<QString> getMappingPaths(UserSettingsPointer pConfig);
 
   signals:
+    void devicesAboutToChange();
     void devicesChanged();
     void requestSetUpDevices();
     void requestShutdown();
     void requestInitialize();
     void mappingApplied(bool applied);
+    void controllerDeviceDisconnected(const QString& deviceName);
+    void controllerDeviceReconnected(const QString& deviceName);
 
   public slots:
+    void slotResumeControllerReconnect(const QString& deviceName, bool audioRecovered);
     void slotApplyMapping(Controller* pController,
             std::shared_ptr<LegacyControllerMapping> pMapping,
             bool bEnabled);
@@ -70,9 +75,14 @@ class ControllerManager : public QObject {
     void slotShutdown();
     /// Calls poll() on all devices that have isPolling() true.
     void slotPollDevices();
+    void slotRetryDisconnectedDevices();
 
   private:
+    void setUpDevices(bool refreshPortMidiOnly);
     void updateControllerList();
+#ifdef __PORTMIDI__
+    void updatePortMidiControllerList();
+#endif
     void startPolling();
     void stopPolling();
     void pollIfAnyControllersOpen();
@@ -82,9 +92,12 @@ class ControllerManager : public QObject {
     UserSettingsPointer m_pConfig;
     ControllerLearningEventFilter* m_pControllerLearningEventFilter;
     QTimer m_pollTimer;
+    QTimer m_reconnectTimer;
     mutable QMutex m_mutex;
     QList<ControllerEnumerator*> m_enumerators;
     QList<Controller*> m_controllers;
+    QSet<QString> m_pendingReconnectDeviceNames;
+    QSet<QString> m_audioGatedReconnectDeviceNames;
     QThread* m_pThread;
     QSharedPointer<MappingInfoEnumerator> m_pMainThreadUserMappingEnumerator;
     QSharedPointer<MappingInfoEnumerator> m_pMainThreadSystemMappingEnumerator;

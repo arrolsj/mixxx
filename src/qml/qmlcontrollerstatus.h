@@ -4,6 +4,7 @@
 #include <QList>
 #include <QPointer>
 #include <QQmlEngine>
+#include <QSet>
 
 #include "controllers/controller.h"
 
@@ -66,14 +67,20 @@ class QmlControllerStatus : public QAbstractListModel {
     void rebuildDevices();
     void handleOpenChanged();
     void handleMappingApplied();
+    void handleDeviceDisconnected(const QString& deviceName);
+    void handleDeviceReconnected(const QString& deviceName);
 
   private:
+    bool isControllerOpen(const Controller* pController) const;
+    void setDeviceForcedDisconnected(
+            const QString& deviceName, bool forcedDisconnected);
     void updateHasOpenController();
 
     static inline ControllerManager* s_pControllerManager = nullptr;
 
     ControllerManager* const m_pManager;
     QList<QPointer<Controller>> m_controllers;
+    QSet<QString> m_forcedDisconnectedDeviceNames;
     bool m_hasOpenController;
 };
 

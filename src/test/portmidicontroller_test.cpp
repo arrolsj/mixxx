@@ -10,6 +10,7 @@
 using ::testing::_;
 using ::testing::DoAll;
 using ::testing::NotNull;
+using ::testing::Invoke;
 using ::testing::Return;
 using ::testing::Sequence;
 using ::testing::SetArrayArgument;
@@ -40,9 +41,24 @@ class MockPortMidiController : public PortMidiController {
             void(unsigned char, unsigned char, unsigned char, mixxx::Duration));
     MOCK_METHOD2(receive, void(const QByteArray&, mixxx::Duration));
 
+    bool isNativeDevicePresent() const override {
+        ++m_nativePresenceCheckCount;
+        return m_nativeDevicePresent;
+    }
+    void setNativeDevicePresent(bool present) {
+        m_nativeDevicePresent = present;
+    }
+    int nativePresenceCheckCount() const {
+        return m_nativePresenceCheckCount;
+    }
+
     // These tests are unrelated to scripting.
     MOCK_METHOD0(startEngine, void());
     MOCK_METHOD0(stopEngine, void());
+
+  private:
+    bool m_nativeDevicePresent{true};
+    mutable int m_nativePresenceCheckCount{0};
 };
 
 class MockPortMidiDevice : public PortMidiDevice {
@@ -101,6 +117,14 @@ class PortMidiControllerTest : public MixxxTest {
         m_pController->poll();
     }
 
+    void expireNativePresenceCheck() {
+        m_pController->m_nativePresenceCheckTimer.invalidate();
+    }
+
+    bool deviceDisconnected() const {
+        return m_pController->hasDisconnected();
+    }
+
     PmDeviceInfo m_inputDeviceInfo;
     PmDeviceInfo m_outputDeviceInfo;
     MockPortMidiDevice* m_mockInput;
@@ -156,6 +180,44 @@ TEST_F(PortMidiControllerTest, OpenClose) {
     closeDevice();
     EXPECT_FALSE(m_pController->isOpen());
 };
+
+TEST_F(PortMidiControllerTest, Open_DeviceRemovedDuringMappingStaysClosed) {
+    ON_CALL(*m_mockInput, isOpen())
+            .WillByDefault(Return(true));
+    EXPECT_CALL(*m_mockInput, openInput(MIXXX_PORTMIDI_BUFFER_LEN))
+            .WillOnce(Return(pmNoError));
+    EXPECT_CALL(*m_mockInput, close())
+            .WillOnce(Return(pmNoError));
+
+    ON_CALL(*m_mockOutput, isOpen())
+            .WillByDefault(Return(true));
+    EXPECT_CALL(*m_mockOutput, openOutput())
+            .WillOnce(Return(pmNoError));
+    EXPECT_CALL(*m_mockOutput, writeShort(_))
+            .WillOnce(Return(pmDeviceRemoved));
+    EXPECT_CALL(*m_mockOutput, close())
+            .WillOnce(Return(pmNoError));
+
+    EXPECT_CALL(*m_pController, startEngine()).WillOnce(Invoke([this] {
+        m_pController->sendShortMsg(0x90, 0x3C, 0x40);
+    }));
+    EXPECT_CALL(*m_pController, stopEngine());
+
+    openDevice();
+    EXPECT_FALSE(m_pController->isOpen());
+    EXPECT_TRUE(deviceDisconnected());
+}
+
+TEST_F(PortMidiControllerTest, WriteAfterDeviceRemovedIsSuppressed) {
+    EXPECT_CALL(*m_mockOutput, isOpen())
+            .WillRepeatedly(Return(true));
+    EXPECT_CALL(*m_mockOutput, writeShort(_))
+            .WillOnce(Return(pmDeviceRemoved));
+
+    m_pController->sendShortMsg(0x90, 0x3C, 0x40);
+    EXPECT_TRUE(deviceDisconnected());
+    m_pController->sendShortMsg(0x90, 0x3D, 0x40);
+}
 
 TEST_F(PortMidiControllerTest, WriteShort) {
     // Note that Pm_WriteShort takes an int32_t formatted as 0x00B2B1SS where SS
@@ -225,6 +287,71 @@ TEST_F(PortMidiControllerTest, Poll_Read_Basic) {
 
     pollDevice();
 };
+
+TEST_F(PortMidiControllerTest, Poll_DeviceRemovedMarksControllerDisconnected) {
+    EXPECT_CALL(*m_mockInput, isOpen())
+            .WillRepeatedly(Return(true));
+    EXPECT_CALL(*m_mockInput, read(NotNull(), _))
+            .WillOnce(Return(pmDeviceRemoved));
+
+    EXPECT_FALSE(deviceDisconnected());
+    pollDevice();
+    EXPECT_TRUE(deviceDisconnected());
+}
+
+TEST_F(PortMidiControllerTest,
+        Poll_NativeDeviceMissingTwiceMarksControllerDisconnected) {
+    m_pController->setNativeDevicePresent(false);
+    EXPECT_CALL(*m_mockInput, isOpen())
+            .WillOnce(Return(false));
+
+    pollDevice();
+    EXPECT_FALSE(deviceDisconnected());
+    expireNativePresenceCheck();
+    pollDevice();
+    EXPECT_TRUE(deviceDisconnected());
+}
+
+TEST_F(PortMidiControllerTest, Poll_NativePresenceRecoveryResetsMissingCount) {
+    EXPECT_CALL(*m_mockInput, isOpen())
+            .WillRepeatedly(Return(false));
+
+    m_pController->setNativeDevicePresent(false);
+    pollDevice();
+    EXPECT_FALSE(deviceDisconnected());
+    expireNativePresenceCheck();
+    m_pController->setNativeDevicePresent(true);
+    pollDevice();
+    EXPECT_FALSE(deviceDisconnected());
+    expireNativePresenceCheck();
+    m_pController->setNativeDevicePresent(false);
+    pollDevice();
+    EXPECT_FALSE(deviceDisconnected());
+    expireNativePresenceCheck();
+    pollDevice();
+    EXPECT_TRUE(deviceDisconnected());
+}
+
+TEST_F(PortMidiControllerTest, Poll_NativePresenceCheckIsThrottled) {
+    EXPECT_CALL(*m_mockInput, isOpen())
+            .WillRepeatedly(Return(false));
+
+    pollDevice();
+    pollDevice();
+    EXPECT_EQ(1, m_pController->nativePresenceCheckCount());
+    EXPECT_FALSE(deviceDisconnected());
+}
+
+TEST_F(PortMidiControllerTest, Poll_BufferOverflowDoesNotMarkControllerDisconnected) {
+    EXPECT_CALL(*m_mockInput, isOpen())
+            .WillRepeatedly(Return(true));
+    EXPECT_CALL(*m_mockInput, read(NotNull(), _))
+            .WillOnce(Return(pmBufferOverflow));
+
+    EXPECT_FALSE(deviceDisconnected());
+    pollDevice();
+    EXPECT_FALSE(deviceDisconnected());
+}
 
 TEST_F(PortMidiControllerTest, Poll_Read_SysExWithRealtime) {
     std::vector<PmEvent> messages;

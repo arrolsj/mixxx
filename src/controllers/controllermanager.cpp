@@ -16,6 +16,7 @@
 #include "util/time.h"
 
 #ifdef __PORTMIDI__
+#include "controllers/midi/portmidicontroller.h"
 #include "controllers/midi/portmidienumerator.h"
 #endif
 
@@ -95,6 +96,7 @@ ControllerManager::ControllerManager(UserSettingsPointer pConfig)
           // its own event loop.
           m_pControllerLearningEventFilter(new ControllerLearningEventFilter()),
           m_pollTimer(this),
+          m_reconnectTimer(this),
           m_skipPoll(false) {
     qRegisterMetaType<std::shared_ptr<LegacyControllerMapping>>(
             "std::shared_ptr<LegacyControllerMapping>");
@@ -108,6 +110,11 @@ ControllerManager::ControllerManager(UserSettingsPointer pConfig)
 
     m_pollTimer.setInterval(kPollInterval.toIntegerMillis());
     connect(&m_pollTimer, &QTimer::timeout, this, &ControllerManager::slotPollDevices);
+    m_reconnectTimer.setInterval(2000);
+    connect(&m_reconnectTimer,
+            &QTimer::timeout,
+            this,
+            &ControllerManager::slotRetryDisconnectedDevices);
 
     m_pThread = new QThread;
     m_pThread->setObjectName("Controller");
@@ -170,6 +177,7 @@ void ControllerManager::slotInitialize() {
 
 void ControllerManager::slotShutdown() {
     stopPolling();
+    m_reconnectTimer.stop();
 
     // Clear m_enumerators before deleting the enumerators to prevent other code
     // paths from accessing them.
@@ -211,6 +219,41 @@ void ControllerManager::updateControllerList() {
         emit devicesChanged();
     }
 }
+
+#ifdef __PORTMIDI__
+void ControllerManager::updatePortMidiControllerList() {
+    auto locker = lockMutex(&m_mutex);
+    PortMidiEnumerator* pPortMidiEnumerator = nullptr;
+    for (ControllerEnumerator* pEnumerator : std::as_const(m_enumerators)) {
+        pPortMidiEnumerator = dynamic_cast<PortMidiEnumerator*>(pEnumerator);
+        if (pPortMidiEnumerator) {
+            break;
+        }
+    }
+    if (!pPortMidiEnumerator) {
+        qWarning() << "PortMidi reconnect requested without an enumerator";
+        return;
+    }
+
+    QList<Controller*> nonPortMidiDevices;
+    for (Controller* pController : std::as_const(m_controllers)) {
+        if (!dynamic_cast<PortMidiController*>(pController)) {
+            nonPortMidiDevices.append(pController);
+        }
+    }
+    locker.unlock();
+
+    QList<Controller*> newDeviceList = pPortMidiEnumerator->queryDevices();
+    newDeviceList.append(nonPortMidiDevices);
+
+    locker.relock();
+    if (newDeviceList != m_controllers) {
+        m_controllers = newDeviceList;
+        locker.unlock();
+        emit devicesChanged();
+    }
+}
+#endif
 
 QList<Controller*> ControllerManager::getControllers() const {
     const auto locker = lockMutex(&m_mutex);
@@ -258,14 +301,56 @@ bool ControllerManager::setUpDevicesBlocking() {
 }
 
 void ControllerManager::slotSetUpDevices() {
-    qDebug() << "ControllerManager: Setting up devices";
+    setUpDevices(false);
+}
 
+void ControllerManager::setUpDevices(bool refreshPortMidiOnly) {
+    const QSet<QString> reconnectNamesAtStart = m_pendingReconnectDeviceNames;
+
+    qDebug() << "ControllerManager: Setting up devices";
+    const auto isTargetController = [refreshPortMidiOnly](Controller* pController) {
+#ifdef __PORTMIDI__
+        return !refreshPortMidiOnly ||
+                dynamic_cast<PortMidiController*>(pController);
+#else
+        Q_UNUSED(pController);
+        return true;
+#endif
+    };
+
+    const QList<Controller*> previousDeviceList = getControllers();
+    if (!refreshPortMidiOnly && !previousDeviceList.isEmpty()) {
+        // GUI clients release widgets that refer to the old list before any
+        // backend refresh can invalidate native device descriptors.
+        emit devicesAboutToChange();
+    }
+    stopPolling();
+    for (Controller* pController : previousDeviceList) {
+        if (!isTargetController(pController)) {
+            continue;
+        }
+        if (pController->isOpen()) {
+            pController->close();
+        }
+    }
+
+#ifdef __PORTMIDI__
+    if (refreshPortMidiOnly) {
+        updatePortMidiControllerList();
+    } else {
+        updateControllerList();
+    }
+#else
     updateControllerList();
+#endif
     const QList<Controller*> deviceList = getControllerList(false, true);
     QStringList mappingPaths(getMappingPaths(m_pConfig));
 
     for (Controller* pController : deviceList) {
         QString name = pController->getName();
+        if (!isTargetController(pController)) {
+            continue;
+        }
 
         if (pController->isOpen()) {
             pController->close();
@@ -319,6 +404,45 @@ void ControllerManager::slotSetUpDevices() {
             continue;
         }
     }
+
+    QSet<QString> configuredDeviceNames;
+    for (const ConfigKey& key : m_pConfig->getKeysWithGroup(QStringLiteral("[Controller]"))) {
+        if (m_pConfig->getValue(key, 0) &&
+                !getConfiguredMappingFileForDevice(key.item).isEmpty()) {
+            configuredDeviceNames.insert(key.item);
+        }
+    }
+    m_pendingReconnectDeviceNames.intersect(configuredDeviceNames);
+
+    QSet<QString> openDeviceNames;
+    for (Controller* pController : deviceList) {
+        if (pController->isOpen()) {
+            openDeviceNames.insert(sanitizeDeviceName(pController->getName()));
+        }
+    }
+    m_pendingReconnectDeviceNames.unite(configuredDeviceNames);
+    m_pendingReconnectDeviceNames.subtract(openDeviceNames);
+    m_audioGatedReconnectDeviceNames.intersect(m_pendingReconnectDeviceNames);
+    for (const QString& deviceName : reconnectNamesAtStart) {
+        if (!m_pendingReconnectDeviceNames.contains(deviceName)) {
+            qInfo() << "Controller device reconnected:" << deviceName;
+            emit controllerDeviceReconnected(deviceName);
+        }
+    }
+
+    if (m_pendingReconnectDeviceNames.isEmpty()) {
+        m_reconnectTimer.stop();
+    } else if (!m_audioGatedReconnectDeviceNames.isEmpty()) {
+        m_reconnectTimer.stop();
+    } else if (!m_reconnectTimer.isActive()) {
+        qInfo() << "Waiting for disconnected controllers:"
+                << m_pendingReconnectDeviceNames.values();
+        m_reconnectTimer.start();
+    }
+    // Consumers such as the QML mapping-learning backend must observe the
+    // final open state even when device enumeration returned the same objects.
+    emit devicesChanged();
+
 
     pollIfAnyControllersOpen();
 }
@@ -383,10 +507,36 @@ void ControllerManager::slotPollDevices() {
     }
 
     mixxx::Duration start = mixxx::Time::elapsed();
+    QSet<QString> disconnectedDeviceNames;
     for (Controller* pDevice : std::as_const(m_controllers)) {
         if (pDevice->isOpen() && pDevice->isPolling()) {
             pDevice->poll();
+            if (pDevice->hasDisconnected()) {
+                disconnectedDeviceNames.insert(
+                        sanitizeDeviceName(pDevice->getName()));
+            }
         }
+    }
+
+    if (!disconnectedDeviceNames.isEmpty()) {
+        qWarning() << "Controller devices disconnected; waiting for device "
+                      "enumeration to settle:"
+                   << disconnectedDeviceNames.values();
+        m_audioGatedReconnectDeviceNames.unite(disconnectedDeviceNames);
+        m_pendingReconnectDeviceNames.unite(disconnectedDeviceNames);
+        stopPolling();
+        for (Controller* pDevice : std::as_const(m_controllers)) {
+            if (disconnectedDeviceNames.contains(
+                        sanitizeDeviceName(pDevice->getName())) &&
+                    pDevice->isOpen()) {
+                pDevice->close();
+            }
+        }
+        for (const QString& deviceName : disconnectedDeviceNames) {
+            emit controllerDeviceDisconnected(deviceName);
+        }
+        m_reconnectTimer.stop();
+        return;
     }
 
     mixxx::Duration duration = mixxx::Time::elapsed() - start;
@@ -394,6 +544,42 @@ void ControllerManager::slotPollDevices() {
         m_skipPoll = true;
     }
     //qDebug() << "ControllerManager::pollDevices()" << duration << start;
+}
+
+void ControllerManager::slotRetryDisconnectedDevices() {
+    if (m_pendingReconnectDeviceNames.isEmpty()) {
+        m_reconnectTimer.stop();
+        return;
+    }
+    if (!m_audioGatedReconnectDeviceNames.isEmpty()) {
+        m_reconnectTimer.stop();
+        return;
+    }
+    qDebug() << "Retrying disconnected controller discovery";
+    setUpDevices(true);
+}
+
+void ControllerManager::slotResumeControllerReconnect(
+        const QString& deviceName,
+        bool audioRecovered) {
+    if (!m_pendingReconnectDeviceNames.contains(deviceName)) {
+        return;
+    }
+
+    m_audioGatedReconnectDeviceNames.remove(deviceName);
+    if (audioRecovered) {
+        // Native audio and MIDI endpoints can become visible before the
+        // controller firmware and driver streams are ready. Opening PortMidi
+        // immediately may succeed but leave a silent input stream, and the
+        // one-time mapping initialization messages may be lost. Reuse the
+        // reconnect timer to let the device settle before refreshing PortMidi
+        // and applying the mapping.
+        qInfo() << "Audio device is ready; waiting for controller MIDI to settle:"
+                << deviceName;
+        m_reconnectTimer.start();
+    } else {
+        m_reconnectTimer.start();
+    }
 }
 
 void ControllerManager::openController(Controller* pController) {

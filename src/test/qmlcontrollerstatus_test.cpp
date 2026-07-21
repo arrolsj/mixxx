@@ -212,4 +212,56 @@ TEST_F(QmlControllerStatusTest, NotifiesOpenAndMappingRoles) {
                     .toString());
 }
 
+TEST_F(QmlControllerStatusTest,
+        ForcesMatchingDeviceRowsClosedUntilReconnected) {
+    FakeController input(QStringLiteral("PIONEER DJ DDJ-SX3"), true, false);
+    FakeController output(QStringLiteral("PIONEER DJ DDJ-SX3"), false, true);
+    FakeController other(QStringLiteral("Loopback"), true, false);
+    input.setOpened(true);
+    output.setOpened(true);
+    other.setOpened(true);
+
+    TestableQmlControllerStatus status;
+    status.setControllers(QList<Controller*>{&input, &output, &other});
+
+    const auto isOpen = [&status](int row) {
+        return status
+                .data(status.index(row, 0),
+                        mixxx::qml::QmlControllerStatus::OpenRole)
+                .toBool();
+    };
+    const QString deviceName = QStringLiteral("PIONEER_DJ_DDJ-SX3");
+
+    ASSERT_TRUE(status.hasOpenController());
+    ASSERT_TRUE(QMetaObject::invokeMethod(&status,
+            "handleDeviceDisconnected",
+            Qt::DirectConnection,
+            Q_ARG(QString, deviceName)));
+    EXPECT_FALSE(isOpen(0));
+    EXPECT_FALSE(isOpen(1));
+    EXPECT_TRUE(isOpen(2));
+    EXPECT_TRUE(status.hasOpenController());
+    EXPECT_TRUE(input.isOpen());
+    EXPECT_TRUE(output.isOpen());
+
+    // Enumeration must not temporarily clear the logical disconnect state
+    // while stale native controller objects still report themselves open.
+    status.setControllers(QList<Controller*>{&input, &output, &other});
+    EXPECT_FALSE(isOpen(0));
+    EXPECT_FALSE(isOpen(1));
+    EXPECT_TRUE(isOpen(2));
+
+    other.setOpened(false);
+    EXPECT_FALSE(status.hasOpenController());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&status,
+            "handleDeviceReconnected",
+            Qt::DirectConnection,
+            Q_ARG(QString, deviceName)));
+    EXPECT_TRUE(isOpen(0));
+    EXPECT_TRUE(isOpen(1));
+    EXPECT_FALSE(isOpen(2));
+    EXPECT_TRUE(status.hasOpenController());
+}
+
 } // namespace

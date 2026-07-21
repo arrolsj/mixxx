@@ -2865,6 +2865,9 @@ if(PORTMIDI)
   find_package(PortMidi REQUIRED)
   target_include_directories(mixxx-lib SYSTEM PUBLIC ${PortMidi_INCLUDE_DIRS})
   target_link_libraries(mixxx-lib PRIVATE ${PortMidi_LIBRARIES})
+  if(WIN32)
+    target_link_libraries(mixxx-lib PRIVATE winmm)
+  endif()
   target_sources(mixxx-lib PRIVATE
     src/controllers/midi/portmidicontroller.cpp
     src/controllers/midi/portmidienumerator.cpp

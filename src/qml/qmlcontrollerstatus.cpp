@@ -16,6 +16,10 @@ const QHash<int, QByteArray> kRoleNames = {
         {QmlControllerStatus::OutputRole, "output"},
         {QmlControllerStatus::MappingRole, "mapping"},
 };
+
+QString sanitizeDeviceName(QString name) {
+    return name.replace(" ", "_").replace("/", "_").replace("\\", "_");
+}
 } // namespace
 
 QmlControllerStatus::QmlControllerStatus(
@@ -35,6 +39,14 @@ QmlControllerStatus::QmlControllerStatus(
             &ControllerManager::mappingApplied,
             this,
             &QmlControllerStatus::handleMappingApplied);
+    connect(m_pManager,
+            &ControllerManager::controllerDeviceDisconnected,
+            this,
+            &QmlControllerStatus::handleDeviceDisconnected);
+    connect(m_pManager,
+            &ControllerManager::controllerDeviceReconnected,
+            this,
+            &QmlControllerStatus::handleDeviceReconnected);
     rebuildDevices();
 }
 
@@ -74,7 +86,7 @@ QVariant QmlControllerStatus::data(const QModelIndex& index, int role) const {
     case NameRole:
         return pController->getName();
     case OpenRole:
-        return pController->isOpen();
+        return isControllerOpen(pController);
     case InputRole:
         return pController->isInputDevice();
     case OutputRole:
@@ -139,10 +151,57 @@ void QmlControllerStatus::handleMappingApplied() {
     }
 }
 
+void QmlControllerStatus::handleDeviceDisconnected(const QString& deviceName) {
+    setDeviceForcedDisconnected(deviceName, true);
+}
+
+void QmlControllerStatus::handleDeviceReconnected(const QString& deviceName) {
+    setDeviceForcedDisconnected(deviceName, false);
+}
+
+bool QmlControllerStatus::isControllerOpen(
+        const Controller* pController) const {
+    return pController && pController->isOpen() &&
+            !m_forcedDisconnectedDeviceNames.contains(
+                    sanitizeDeviceName(pController->getName()));
+}
+
+void QmlControllerStatus::setDeviceForcedDisconnected(
+        const QString& deviceName,
+        bool forcedDisconnected) {
+    const QString sanitizedDeviceName = sanitizeDeviceName(deviceName);
+    if (sanitizedDeviceName.isEmpty()) {
+        return;
+    }
+
+    bool changed = false;
+    if (forcedDisconnected) {
+        if (!m_forcedDisconnectedDeviceNames.contains(sanitizedDeviceName)) {
+            m_forcedDisconnectedDeviceNames.insert(sanitizedDeviceName);
+            changed = true;
+        }
+    } else {
+        changed = m_forcedDisconnectedDeviceNames.remove(sanitizedDeviceName);
+    }
+    if (!changed) {
+        return;
+    }
+
+    for (int row = 0; row < m_controllers.size(); ++row) {
+        const Controller* pController = m_controllers.at(row);
+        if (pController &&
+                sanitizeDeviceName(pController->getName()) ==
+                        sanitizedDeviceName) {
+            emit dataChanged(index(row, 0), index(row, 0), {OpenRole});
+        }
+    }
+    updateHasOpenController();
+}
+
 void QmlControllerStatus::updateHasOpenController() {
     bool hasOpenController = false;
     for (const auto& pController : std::as_const(m_controllers)) {
-        if (pController && pController->isOpen()) {
+        if (isControllerOpen(pController)) {
             hasOpenController = true;
             break;
         }

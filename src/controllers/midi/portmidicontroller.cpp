@@ -1,10 +1,58 @@
 #include "controllers/midi/portmidicontroller.h"
 
+#if defined(__WINDOWS__)
+#include <windows.h>
+#endif
+
 #include "controllers/midi/midiutils.h"
 #include "moc_portmidicontroller.cpp"
 
 namespace {
 const QString kUnknownControllerName = QStringLiteral("Unknown PortMidiController");
+constexpr qint64 kNativePresenceCheckIntervalMillis = 250;
+constexpr int kNativePresenceMissThreshold = 2;
+
+QString portMidiString(const char* value) {
+    return value ? QString::fromLocal8Bit(value) : QString();
+}
+
+bool isDisconnectError(PmError error) {
+    return error == pmDeviceRemoved || error == pmHostError ||
+            error == pmBadPtr || error == pmInvalidDeviceId;
+}
+
+#if defined(__WINDOWS__)
+bool winMmInputDevicePresent(const QString& expectedName) {
+    const UINT deviceCount = midiInGetNumDevs();
+    for (UINT deviceId = 0; deviceId < deviceCount; ++deviceId) {
+        MIDIINCAPSW capabilities{};
+        if (midiInGetDevCapsW(
+                    deviceId, &capabilities, sizeof(capabilities)) ==
+                        MMSYSERR_NOERROR &&
+                QString::fromWCharArray(capabilities.szPname)
+                                .compare(expectedName, Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool winMmOutputDevicePresent(const QString& expectedName) {
+    const UINT deviceCount = midiOutGetNumDevs();
+    for (UINT deviceId = 0; deviceId < deviceCount; ++deviceId) {
+        MIDIOUTCAPSW capabilities{};
+        if (midiOutGetDevCapsW(
+                    deviceId, &capabilities, sizeof(capabilities)) ==
+                        MMSYSERR_NOERROR &&
+                QString::fromWCharArray(capabilities.szPname)
+                                .compare(expectedName, Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 } // namespace
 
 PortMidiController::PortMidiController(const PmDeviceInfo* inputDeviceInfo,
@@ -12,12 +60,26 @@ PortMidiController::PortMidiController(const PmDeviceInfo* inputDeviceInfo,
         int inputDeviceIndex,
         int outputDeviceIndex)
         : MidiController((inputDeviceInfo || outputDeviceInfo)
-                          ? QString::fromLocal8Bit(inputDeviceInfo
+                          ? portMidiString(inputDeviceInfo
                                             ? inputDeviceInfo->name
                                             : outputDeviceInfo->name)
                           : kUnknownControllerName),
           m_cReceiveMsg_index(0),
-          m_bInSysex(false) {
+          m_bInSysex(false),
+          m_bDisconnected(false),
+          m_inputDeviceName(inputDeviceInfo
+                          ? portMidiString(inputDeviceInfo->name)
+                          : QString()),
+          m_inputDeviceInterface(inputDeviceInfo
+                          ? portMidiString(inputDeviceInfo->interf)
+                          : QString()),
+          m_outputDeviceName(outputDeviceInfo
+                          ? portMidiString(outputDeviceInfo->name)
+                          : QString()),
+          m_outputDeviceInterface(outputDeviceInfo
+                          ? portMidiString(outputDeviceInfo->interf)
+                          : QString()),
+          m_consecutiveNativePresenceMisses(0) {
     for (int k = 0; k < MIXXX_PORTMIDI_BUFFER_LEN; ++k) {
         m_midiBuffer[k] = {0, 0};
     }
@@ -43,6 +105,48 @@ PortMidiController::~PortMidiController() {
     }
 }
 
+void PortMidiController::releaseDevicesForRescan() {
+    if (isOpen()) {
+        close();
+    }
+    m_pInputDevice.reset();
+    m_pOutputDevice.reset();
+    setInputDevice(false);
+    setOutputDevice(false);
+    m_nativePresenceCheckTimer.invalidate();
+    m_consecutiveNativePresenceMisses = 0;
+}
+
+void PortMidiController::rebindDevices(const PmDeviceInfo* inputDeviceInfo,
+        const PmDeviceInfo* outputDeviceInfo,
+        int inputDeviceIndex,
+        int outputDeviceIndex) {
+    releaseDevicesForRescan();
+    m_inputDeviceName = inputDeviceInfo
+            ? portMidiString(inputDeviceInfo->name)
+            : QString();
+    m_inputDeviceInterface = inputDeviceInfo
+            ? portMidiString(inputDeviceInfo->interf)
+            : QString();
+    m_outputDeviceName = outputDeviceInfo
+            ? portMidiString(outputDeviceInfo->name)
+            : QString();
+    m_outputDeviceInterface = outputDeviceInfo
+            ? portMidiString(outputDeviceInfo->interf)
+            : QString();
+    if (inputDeviceInfo) {
+        setInputDevice(inputDeviceInfo->input);
+        m_pInputDevice.reset(new PortMidiDevice(inputDeviceInfo, inputDeviceIndex));
+    }
+    if (outputDeviceInfo) {
+        setOutputDevice(outputDeviceInfo->output);
+        m_pOutputDevice.reset(new PortMidiDevice(outputDeviceInfo, outputDeviceIndex));
+    }
+    m_bDisconnected = false;
+    m_nativePresenceCheckTimer.invalidate();
+    m_consecutiveNativePresenceMisses = 0;
+}
+
 int PortMidiController::open() {
     if (isOpen()) {
         qCWarning(m_logBase) << "PortMIDI device" << getName() << "already open";
@@ -55,6 +159,9 @@ int PortMidiController::open() {
 
     m_bInSysex = false;
     m_cReceiveMsg_index = 0;
+    m_bDisconnected = false;
+    m_nativePresenceCheckTimer.invalidate();
+    m_consecutiveNativePresenceMisses = 0;
 
     if (m_pInputDevice && isInputDevice()) {
         qCInfo(m_logBase) << "PortMidiController: Opening"
@@ -80,6 +187,27 @@ int PortMidiController::open() {
     }
     startEngine();
     applyMapping();
+    if (m_bDisconnected) {
+        qCWarning(m_logBase)
+                << "PortMidi device disappeared while applying its mapping";
+        stopEngine();
+        if (m_pInputDevice && m_pInputDevice->isOpen()) {
+            const PmError err = m_pInputDevice->close();
+            if (err != pmNoError) {
+                qCWarning(m_logBase) << "PortMidi input close error:"
+                                     << Pm_GetErrorText(err);
+            }
+        }
+        if (m_pOutputDevice && m_pOutputDevice->isOpen()) {
+            const PmError err = m_pOutputDevice->close();
+            if (err != pmNoError) {
+                qCWarning(m_logBase) << "PortMidi output close error:"
+                                     << Pm_GetErrorText(err);
+            }
+        }
+        return -2;
+    }
+
     setOpen(true);
     return 0;
 }
@@ -116,6 +244,22 @@ int PortMidiController::close() {
 }
 
 bool PortMidiController::poll() {
+    if (!m_nativePresenceCheckTimer.isValid() ||
+            m_nativePresenceCheckTimer.hasExpired(
+                    kNativePresenceCheckIntervalMillis)) {
+        m_nativePresenceCheckTimer.restart();
+        if (isNativeDevicePresent()) {
+            m_consecutiveNativePresenceMisses = 0;
+        } else if (++m_consecutiveNativePresenceMisses >=
+                kNativePresenceMissThreshold) {
+            qCWarning(m_logBase)
+                    << "PortMidi device disappeared from the native MIDI topology:"
+                    << getName();
+            m_bDisconnected = true;
+            return false;
+        }
+    }
+
     // Poll the controller for new data if it's an input device
     if (m_pInputDevice.isNull() || !m_pInputDevice->isOpen()) {
         return false;
@@ -127,6 +271,9 @@ bool PortMidiController::poll() {
 
     if (numEvents < 0) {
         qCWarning(m_logInput) << "PortMidi error:" << Pm_GetErrorText((PmError)numEvents);
+        if (isDisconnectError(static_cast<PmError>(numEvents))) {
+            m_bDisconnected = true;
+        }
         return false;
     }
 
@@ -191,8 +338,30 @@ bool PortMidiController::poll() {
     return numEvents > 0;
 }
 
+bool PortMidiController::isNativeDevicePresent() const {
+#if defined(__WINDOWS__)
+    const auto isMmSystemInterface = [](const QString& deviceInterface) {
+        return deviceInterface.compare(
+                       QStringLiteral("MMSystem"), Qt::CaseInsensitive) == 0;
+    };
+
+    if (isInputDevice() && isMmSystemInterface(m_inputDeviceInterface) &&
+            !winMmInputDevicePresent(m_inputDeviceName)) {
+        return false;
+    }
+    if (isOutputDevice() && isMmSystemInterface(m_outputDeviceInterface) &&
+            !winMmOutputDevicePresent(m_outputDeviceName)) {
+        return false;
+    }
+#endif
+    return true;
+}
+
 void PortMidiController::sendShortMsg(unsigned char status, unsigned char byte1,
                                       unsigned char byte2) {
+    if (m_bDisconnected) {
+        return;
+    }
     if (m_pOutputDevice.isNull() || !m_pOutputDevice->isOpen()) {
         return;
     }
@@ -219,11 +388,17 @@ void PortMidiController::sendShortMsg(unsigned char status, unsigned char byte1,
                                           MidiUtils::channelFromStatus(status),
                                           MidiUtils::opCodeFromStatus(status));
         qCWarning(m_logOutput) << "PortMidi error:" << Pm_GetErrorText(err);
+        if (isDisconnectError(err)) {
+            m_bDisconnected = true;
+        }
     }
 }
 
 void PortMidiController::sendBytes(const QByteArray& data) {
     // PortMidi does not receive a length argument for the buffer we provide to
+    if (m_bDisconnected) {
+        return;
+    }
     // Pm_WriteSysEx. Instead, it scans for a MidiOpCode::EndOfExclusive byte
     // to know when the message is over. If one is not provided, it will
     // overflow the buffer and cause a segfault.
@@ -245,5 +420,8 @@ void PortMidiController::sendBytes(const QByteArray& data) {
         qCWarning(m_logOutput) << "Error sending SysEx message:"
                                << MidiUtils::formatSysexMessage(getName(), data);
         qCWarning(m_logOutput) << "PortMidi error:" << Pm_GetErrorText(err);
+        if (isDisconnectError(err)) {
+            m_bDisconnected = true;
+        }
     }
 }

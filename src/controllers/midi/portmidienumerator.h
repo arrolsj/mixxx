@@ -2,6 +2,8 @@
 
 #include "controllers/midi/midienumerator.h"
 
+class PortMidiController;
+
 /// This class handles discovery and enumeration of DJ controllers that appear under the PortMIDI cross-platform API.
 class PortMidiEnumerator : public MidiEnumerator {
     Q_OBJECT
@@ -12,7 +14,12 @@ class PortMidiEnumerator : public MidiEnumerator {
     QList<Controller*> queryDevices() override;
 
   private:
-    QList<Controller*> m_devices;
+    bool m_hasQueriedDevices{false};
+    QList<PortMidiController*> m_devices;
+    // Removed devices stay alive so queued GUI and QML signals can never
+    // dereference freed Controller objects. A returning device with the same
+    // name is rebound and reused.
+    QList<PortMidiController*> m_retiredDevices;
 };
 
 // For testing.

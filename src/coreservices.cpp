@@ -621,6 +621,16 @@ void CoreServices::initialize(QApplication* pApp) {
     // (long)
     qDebug() << "Creating ControllerManager";
     m_pControllerManager = std::make_shared<ControllerManager>(pConfig);
+    connect(m_pControllerManager.get(),
+            &ControllerManager::controllerDeviceDisconnected,
+            m_pSoundManager.get(),
+            &SoundManager::scheduleAudioRecoveryForController,
+            Qt::QueuedConnection);
+    connect(m_pSoundManager.get(),
+            &SoundManager::controllerAudioRecoveryFinished,
+            m_pControllerManager.get(),
+            &ControllerManager::slotResumeControllerReconnect,
+            Qt::QueuedConnection);
 
     // Scan the library for new files and directories
     bool rescan = pConfig->getValue<bool>(

@@ -2,6 +2,7 @@
 
 #include <portmidi.h>
 
+#include <QElapsedTimer>
 #include <QScopedPointer>
 
 #include "controllers/midi/midicontroller.h"
@@ -55,10 +56,23 @@ class PortMidiController : public MidiController {
             int outputDeviceIndex);
     ~PortMidiController() override;
 
+    // PortMidi freezes its device table between Pm_Initialize() and
+    // Pm_Terminate(). The enumerator keeps Controller objects stable across a
+    // refresh and rebinds their native device descriptors with this method.
+    void rebindDevices(const PmDeviceInfo* inputDeviceInfo,
+            const PmDeviceInfo* outputDeviceInfo,
+            int inputDeviceIndex,
+            int outputDeviceIndex);
+    void releaseDevicesForRescan();
+
   private slots:
     bool poll() override;
 
   protected:
+    // PortMidi's device table is frozen while it is initialized. On Windows,
+    // check the live MMSystem topology without restarting PortMidi.
+    virtual bool isNativeDevicePresent() const;
+
     // MockPortMidiController needs this to not be private.
     void sendShortMsg(unsigned char status, unsigned char byte1,
                       unsigned char byte2) override;
@@ -66,6 +80,9 @@ class PortMidiController : public MidiController {
   private:
     int open() override;
     int close() override;
+    bool hasDisconnected() const override {
+        return m_bDisconnected;
+    }
 
     // The sysex data must already contain the start byte 0xf0 and the end byte
     // 0xf7.
@@ -92,6 +109,13 @@ class PortMidiController : public MidiController {
     unsigned char m_cReceiveMsg[MIXXX_SYSEX_BUFFER_LEN];
     int m_cReceiveMsg_index;
     bool m_bInSysex;
+    bool m_bDisconnected;
+    QString m_inputDeviceName;
+    QString m_inputDeviceInterface;
+    QString m_outputDeviceName;
+    QString m_outputDeviceInterface;
+    QElapsedTimer m_nativePresenceCheckTimer;
+    int m_consecutiveNativePresenceMisses;
 
     friend class PortMidiControllerTest;
 };

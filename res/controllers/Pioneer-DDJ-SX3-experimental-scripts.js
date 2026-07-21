@@ -111,7 +111,6 @@ PioneerDDJSX.gridAdjustSelected = [false, false, false, false];
 PioneerDDJSX.gridSlideSelected = [false, false, false, false];
 PioneerDDJSX.needleSearchTouched = [false, false, false, false];
 PioneerDDJSX.chFaderStart = [null, null, null, null];
-PioneerDDJSX.toggledBrake = [false, false, false, false];
 PioneerDDJSX.scratchMode = [true, true, true, true];
 PioneerDDJSX.wheelLedsBlinkStatus = [0, 0, 0, 0];
 PioneerDDJSX.wheelLedsPosition = [0, 0, 0, 0];
@@ -982,22 +981,8 @@ PioneerDDJSX.shiftButton = function(channel, control, value, status, group) {
 };
 
 PioneerDDJSX.playButton = function(channel, control, value, status, group) {
-    var deck = PioneerDDJSX.channelGroups[group],
-        playing = engine.getValue(group, "play");
-
     if (value) {
-        if (playing) {
-            script.brake(channel, control, value, status, group);
-            PioneerDDJSX.toggledBrake[deck] = true;
-        } else {
-            script.toggleControl(group, "play");
-        }
-    } else {
-        if (PioneerDDJSX.toggledBrake[deck]) {
-            script.brake(channel, control, value, status, group);
-            script.toggleControl(group, "play");
-            PioneerDDJSX.toggledBrake[deck] = false;
-        }
+        script.toggleControl(group, "play");
     }
 };
 

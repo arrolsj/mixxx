@@ -90,6 +90,34 @@ TEST_F(ControllerScriptEngineLegacyTest, commonScriptHasNoErrors) {
     EXPECT_TRUE(evaluateScriptFile(commonScript));
 }
 
+TEST_F(ControllerScriptEngineLegacyTest,
+        PioneerDdjSx3PlayButtonTogglesOnlyOnPress) {
+    auto playControl =
+            std::make_unique<ControlObject>(ConfigKey("[Test]", "play"));
+
+    QFileInfo commonScript(config()->getResourcePath() +
+            QStringLiteral("/controllers/common-controller-scripts.js"));
+    ASSERT_TRUE(evaluateScriptFile(commonScript));
+    QFileInfo sx3Script(config()->getResourcePath() +
+            QStringLiteral("/controllers/Pioneer-DDJ-SX3-experimental-scripts.js"));
+    ASSERT_TRUE(evaluateScriptFile(sx3Script));
+
+    playControl->set(1.0);
+    EXPECT_TRUE(evaluateAndAssert(
+            "PioneerDDJSX.playButton(0, 0, 127, 0x90, '[Test]');"));
+    EXPECT_DOUBLE_EQ(0.0, playControl->get());
+    EXPECT_TRUE(evaluateAndAssert(
+            "PioneerDDJSX.playButton(0, 0, 0, 0x90, '[Test]');"));
+    EXPECT_DOUBLE_EQ(0.0, playControl->get());
+
+    EXPECT_TRUE(evaluateAndAssert(
+            "PioneerDDJSX.playButton(0, 0, 127, 0x90, '[Test]');"));
+    EXPECT_DOUBLE_EQ(1.0, playControl->get());
+    EXPECT_TRUE(evaluateAndAssert(
+            "PioneerDDJSX.playButton(0, 0, 0, 0x90, '[Test]');"));
+    EXPECT_DOUBLE_EQ(1.0, playControl->get());
+}
+
 TEST_F(ControllerScriptEngineLegacyTest, setValue) {
     auto co = std::make_unique<ControlObject>(ConfigKey("[Test]", "co"));
     EXPECT_TRUE(evaluateAndAssert("engine.setValue('[Test]', 'co', 1.0);"));

@@ -3,8 +3,10 @@
 #include <portaudio.h>
 
 #include <QLibrary>
+#include <QRegularExpression>
 #include <QThread>
 #include <QtGlobal>
+#include <QtConcurrentRun>
 #include <cstring> // for memcpy and strcmp
 
 #include "control/controlobject.h"
@@ -44,6 +46,56 @@ struct DeviceMode {
 #ifdef __LINUX__
 constexpr unsigned int kSleepSecondsAfterClosingDevice = 5;
 #endif
+QString hardwareSignature(QString name) {
+    name.replace('_', ' ');
+    name = name.toUpper();
+    name.remove(QRegularExpression(
+            QStringLiteral("\\b(PIONEER|DJ|ASIO|WASAPI|DIRECTSOUND)\\b")));
+    name.remove(QRegularExpression(QStringLiteral("[^A-Z0-9]")));
+    return name;
+}
+
+bool controllerMatchesConfiguredAudio(
+        const SoundManagerConfig& config,
+        const QString& controllerName) {
+    const QString controllerSignature = hardwareSignature(controllerName);
+    if (controllerSignature.size() < 4) {
+        return false;
+    }
+    for (const SoundDeviceId& deviceId : config.getDevices()) {
+        const QString audioSignature = hardwareSignature(deviceId.name);
+        if (audioSignature.size() >= 4 &&
+                (controllerSignature.contains(audioSignature) ||
+                        audioSignature.contains(controllerSignature))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool portAudioContainsAllDeviceNames(const QStringList& configuredDeviceNames) {
+    if (configuredDeviceNames.isEmpty()) {
+        return false;
+    }
+    if (Pa_Initialize() != paNoError) {
+        return false;
+    }
+
+    QSet<QString> missingDeviceNames(configuredDeviceNames.begin(),
+            configuredDeviceNames.end());
+    const int deviceCount = Pa_GetDeviceCount();
+    for (int deviceIndex = 0;
+            deviceIndex < deviceCount && !missingDeviceNames.isEmpty();
+            ++deviceIndex) {
+        const PaDeviceInfo* pDeviceInfo = Pa_GetDeviceInfo(deviceIndex);
+        if (pDeviceInfo) {
+            missingDeviceNames.remove(QString::fromUtf8(pDeviceInfo->name));
+        }
+    }
+
+    Pa_Terminate();
+    return missingDeviceNames.isEmpty();
+}
 } // anonymous namespace
 
 SoundManager::SoundManager(UserSettingsPointer pConfig,
@@ -65,6 +117,16 @@ SoundManager::SoundManager(UserSettingsPointer pConfig,
 
     m_pControlObjectVinylControlGainCO = new ControlObject(
             ConfigKey(VINYL_PREF_KEY, "gain"));
+    m_audioRecoveryTimer.setSingleShot(true);
+    m_audioRecoveryTimer.setInterval(2000);
+    connect(&m_audioRecoveryTimer,
+            &QTimer::timeout,
+            this,
+            &SoundManager::slotAttemptAudioRecovery);
+    connect(&m_audioRecoveryProbeWatcher,
+            &QFutureWatcher<bool>::finished,
+            this,
+            &SoundManager::slotAudioRecoveryProbeFinished);
 
     //Hack because PortAudio samplerate enumeration is slow as hell on Linux (ALSA dmix sucks, so we can't blame PortAudio)
     m_samplerates.push_back(mixxx::audio::SampleRate(44100));
@@ -88,6 +150,8 @@ SoundManager::SoundManager(UserSettingsPointer pConfig,
 
 SoundManager::~SoundManager() {
     // Clean up devices.
+    m_audioRecoveryTimer.stop();
+    m_audioRecoveryProbeWatcher.waitForFinished();
     const bool sleepAfterClosing = false;
     clearDeviceList(sleepAfterClosing);
 
@@ -575,6 +639,100 @@ SoundDeviceStatus SoundManager::setConfig(const SoundManagerConfig& config) {
         m_config.writeToDisk();
     }
     return status;
+}
+
+void SoundManager::scheduleAudioRecoveryForController(
+        const QString& controllerName) {
+    if (!controllerMatchesConfiguredAudio(m_config, controllerName)) {
+        qDebug() << "Ignoring audio recovery for unrelated controller:"
+                 << controllerName;
+        emit controllerAudioRecoveryFinished(controllerName, false);
+        return;
+    }
+
+    m_audioRecoveryControllerName = controllerName;
+    m_audioRecoveryAttempt = 0;
+    m_audioRecoveryTimer.stop();
+    // Give the queued controller-open state change enough time to render before
+    // an unplugged ASIO driver can block the main thread during teardown.
+    constexpr int kInitialAudioRecoveryDelayMillis = 2000;
+    m_audioRecoveryProbeSucceeded = false;
+    m_audioRecoveryTimer.start(kInitialAudioRecoveryDelayMillis);
+}
+
+void SoundManager::slotAttemptAudioRecovery() {
+    ++m_audioRecoveryAttempt;
+    qInfo() << "Recovering configured audio devices after controller reconnect:"
+            << m_audioRecoveryControllerName
+            << "attempt" << m_audioRecoveryAttempt;
+
+    m_audioRecoveryTimer.stop();
+    if (m_audioRecoveryAttempt > 1 && !m_audioRecoveryProbeSucceeded) {
+        QStringList configuredDeviceNames;
+        for (const SoundDeviceId& deviceId : m_config.getDevices()) {
+            configuredDeviceNames.append(deviceId.name);
+        }
+        configuredDeviceNames.removeDuplicates();
+        qInfo() << "Probing configured audio hardware in the background for"
+                << m_audioRecoveryControllerName
+                << "attempt" << m_audioRecoveryAttempt;
+        m_audioRecoveryProbeWatcher.setFuture(QtConcurrent::run(
+                [configuredDeviceNames]() {
+                    return portAudioContainsAllDeviceNames(
+                            configuredDeviceNames);
+                }));
+        return;
+    }
+    m_audioRecoveryProbeSucceeded = false;
+    const bool sleepAfterClosing = false;
+    clearDeviceList(sleepAfterClosing);
+    queryDevices();
+    QSet<SoundDeviceId> unavailableDevices = m_config.getDevices();
+    for (const auto& pDevice : std::as_const(m_devices)) {
+        unavailableDevices.remove(pDevice->getDeviceId());
+    }
+    if (!unavailableDevices.isEmpty()) {
+        // Keep the sound status disconnected while the hardware is absent.
+        // Calling setupDevices() here would repeatedly publish CONNECTING and
+        // make the UI flash its loading overlay on every retry.
+        qInfo() << "Configured audio hardware is still unavailable for"
+                << m_audioRecoveryControllerName
+                << "; retrying discovery in"
+                << m_audioRecoveryTimer.interval() << "ms";
+        clearDeviceList(sleepAfterClosing);
+        m_audioRecoveryTimer.start();
+        return;
+    }
+    const SoundDeviceStatus status = setupDevices();
+    if (status == SoundDeviceStatus::Ok) {
+        qInfo() << "Configured audio devices recovered after controller reconnect:"
+                << m_audioRecoveryControllerName;
+        emit controllerAudioRecoveryFinished(m_audioRecoveryControllerName, true);
+        return;
+    }
+
+    qWarning() << "Audio recovery attempt failed for"
+               << m_audioRecoveryControllerName
+               << getLastErrorMessage(status)
+               << "; retrying in" << m_audioRecoveryTimer.interval() << "ms";
+    m_audioRecoveryTimer.start();
+    clearDeviceList(sleepAfterClosing);
+}
+
+void SoundManager::slotAudioRecoveryProbeFinished() {
+    if (!m_audioRecoveryProbeWatcher.result()) {
+        qInfo() << "Configured audio hardware is still absent for"
+                << m_audioRecoveryControllerName
+                << "; retrying background probe in"
+                << m_audioRecoveryTimer.interval() << "ms";
+        m_audioRecoveryTimer.start();
+        return;
+    }
+
+    qInfo() << "Configured audio hardware reappeared for"
+            << m_audioRecoveryControllerName;
+    m_audioRecoveryProbeSucceeded = true;
+    slotAttemptAudioRecovery();
 }
 
 void SoundManager::checkConfig() {

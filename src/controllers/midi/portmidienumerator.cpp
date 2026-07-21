@@ -2,6 +2,8 @@
 
 #include <portmidi.h>
 
+#include <utility>
+
 #include <QRegularExpression>
 
 #include "controllers/midi/portmidicontroller.h"
@@ -109,10 +111,8 @@ PortMidiEnumerator::PortMidiEnumerator() {
 
 PortMidiEnumerator::~PortMidiEnumerator() {
     qDebug() << "Deleting PortMIDI devices...";
-    QListIterator<Controller*> dev_it(m_devices);
-    while (dev_it.hasNext()) {
-        delete dev_it.next();
-    }
+    qDeleteAll(m_devices);
+    qDeleteAll(m_retiredDevices);
     PmError err = Pm_Terminate();
     // Based on reading the source, it's not possible for this to fail.
     if (err != pmNoError) {
@@ -180,14 +180,34 @@ bool shouldLinkInputToOutput(const QString& input_name,
 QList<Controller*> PortMidiEnumerator::queryDevices() {
     qDebug() << "Scanning PortMIDI devices:";
 
-    int iNumDevices = Pm_CountDevices();
-
-    QListIterator<Controller*> dev_it(m_devices);
-    while (dev_it.hasNext()) {
-        delete dev_it.next();
+    QList<PortMidiController*> reusableDevices = m_devices;
+    reusableDevices.append(m_retiredDevices);
+    m_devices.clear();
+    m_retiredDevices.clear();
+    for (PortMidiController* pController : std::as_const(reusableDevices)) {
+        pController->releaseDevicesForRescan();
     }
 
-    m_devices.clear();
+    if (m_hasQueriedDevices) {
+        // PortMidi's device table is frozen while it is initialized. All
+        // streams have been closed above, so refreshing the global table is
+        // safe for a rescan. Keep the first query on the original startup
+        // path: immediately terminating a freshly initialized Windows MIDI
+        // backend can leave an otherwise present device unavailable to open.
+        PmError err = Pm_Terminate();
+        if (err != pmNoError) {
+            qWarning() << "PortMidi terminate error during device refresh:"
+                       << Pm_GetErrorText(err);
+        }
+        err = Pm_Initialize();
+        if (err != pmNoError) {
+            qWarning() << "PortMidi initialize error during device refresh:"
+                       << Pm_GetErrorText(err);
+        }
+    }
+    m_hasQueriedDevices = true;
+
+    int iNumDevices = Pm_CountDevices();
 
     const PmDeviceInfo* inputDeviceInfo = nullptr;
     const PmDeviceInfo* outputDeviceInfo = nullptr;
@@ -256,12 +276,36 @@ QList<Controller*> PortMidiEnumerator::queryDevices() {
         // device (outputDeviceInfo != NULL).
 
         //.... so create our (aggregate) MIDI device!
-        PortMidiController* currentDevice =
-                new PortMidiController(inputDeviceInfo,
-                        outputDeviceInfo,
-                        inputDevIndex,
-                        outputDevIndex);
+        const QString controllerName = QString::fromLocal8Bit(inputDeviceInfo
+                        ? inputDeviceInfo->name
+                        : outputDeviceInfo->name);
+        PortMidiController* currentDevice = nullptr;
+        for (auto it = reusableDevices.begin(); it != reusableDevices.end(); ++it) {
+            if ((*it)->getName() == controllerName) {
+                currentDevice = *it;
+                reusableDevices.erase(it);
+                break;
+            }
+        }
+        if (currentDevice) {
+            currentDevice->rebindDevices(inputDeviceInfo,
+                    outputDeviceInfo,
+                    inputDevIndex,
+                    outputDevIndex);
+        } else {
+            currentDevice = new PortMidiController(inputDeviceInfo,
+                    outputDeviceInfo,
+                    inputDevIndex,
+                    outputDevIndex);
+        }
         m_devices.push_back(currentDevice);
     }
-    return m_devices;
+    m_retiredDevices = reusableDevices;
+
+    QList<Controller*> devices;
+    devices.reserve(m_devices.size());
+    for (PortMidiController* pController : std::as_const(m_devices)) {
+        devices.push_back(pController);
+    }
+    return devices;
 }
