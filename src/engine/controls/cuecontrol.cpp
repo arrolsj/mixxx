@@ -676,6 +676,7 @@ void CueControl::loadCuesFromTrack() {
         }
         case mixxx::CueType::Beat:
         case mixxx::CueType::Jump:
+        case mixxx::CueType::MemoryCue:
         case mixxx::CueType::Invalid:
         default:
             break;

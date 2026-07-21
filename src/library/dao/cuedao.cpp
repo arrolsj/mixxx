@@ -207,6 +207,13 @@ void CueDAO::saveTrackCues(
     QStringList cueIds;
     cueIds.reserve(cueList.size());
     for (const auto& pCue : cueList) {
+        // Memory cues imported from external libraries are display-only
+        // markers. Keep them on the in-memory Track, but never persist them
+        // to the Mixxx database.
+        if (pCue->getType() == mixxx::CueType::MemoryCue) {
+            continue;
+        }
+
         // New cues (without an id) must always be marked as dirty
         DEBUG_ASSERT(pCue->getId().isValid() || pCue->isDirty());
         // Update or save cue

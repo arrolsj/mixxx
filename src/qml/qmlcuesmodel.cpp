@@ -4,6 +4,8 @@
 
 #include "moc_qmlcuesmodel.cpp"
 #include "track/cue.h"
+#include "util/color/predefinedcolorpalettes.h"
+#include "util/color/rgbcolor.h"
 
 namespace mixxx {
 namespace qml {
@@ -14,6 +16,7 @@ const QHash<int, QByteArray> kRoleNames = {
         {QmlCuesModel::LabelRole, "label"},
         {QmlCuesModel::IsLoopRole, "isLoop"},
         {QmlCuesModel::HotcueNumberRole, "hotcueNumber"},
+        {QmlCuesModel::ColorRole, "color"},
 };
 }
 
@@ -53,6 +56,15 @@ QVariant QmlCuesModel::data(const QModelIndex& index, int role) const {
         return pCue->getType() == CueType::Loop;
     case QmlCuesModel::HotcueNumberRole:
         return pCue->getHotCue();
+    case QmlCuesModel::ColorRole:
+        // Cue currently stores a concrete color rather than an optional one.
+        // The default cue color is also used when Rekordbox PCOB has no color,
+        // so expose it as transparent and let QML apply its existing fallback.
+        if (pCue->getColor() ==
+                mixxx::PredefinedColorPalettes::kDefaultCueColor) {
+            return QColor(0, 0, 0, 0);
+        }
+        return mixxx::RgbColor::toQColor(pCue->getColor());
     default:
         return QVariant();
     }

@@ -52,6 +52,7 @@ class QmlPlayerProxy : public QObject, private VSyncTimeProvider {
 
     Q_PROPERTY(mixxx::qml::QmlBeatsModel* beatsModel MEMBER m_pBeatsModel CONSTANT);
     Q_PROPERTY(mixxx::qml::QmlCuesModel* hotcuesModel MEMBER m_pHotcuesModel CONSTANT);
+    Q_PROPERTY(mixxx::qml::QmlCuesModel* memoryCuesModel MEMBER m_pMemoryCuesModel CONSTANT);
 
   public:
     explicit QmlPlayerProxy(BaseTrackPlayer* pTrackPlayer, QObject* parent = nullptr);
@@ -152,6 +153,7 @@ class QmlPlayerProxy : public QObject, private VSyncTimeProvider {
     PerformanceTimer m_visualFrameTime;
     int m_visualFrameIntervalMicros;
     QmlCuesModel* m_pHotcuesModel;
+    QmlCuesModel* m_pMemoryCuesModel;
 };
 
 } // namespace qml

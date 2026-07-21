@@ -34,7 +34,8 @@ QmlPlayerProxy::QmlPlayerProxy(BaseTrackPlayer* pTrackPlayer, QObject* parent)
           m_pTrackPlayer(pTrackPlayer),
           m_visualFrameIntervalMicros(16667),
           m_pBeatsModel(new QmlBeatsModel(this)),
-          m_pHotcuesModel(new QmlCuesModel(this)) {
+          m_pHotcuesModel(new QmlCuesModel(this)),
+          m_pMemoryCuesModel(new QmlCuesModel(this)) {
     connect(m_pTrackPlayer,
             &BaseTrackPlayer::loadingTrack,
             this,
@@ -259,19 +260,31 @@ void QmlPlayerProxy::slotHotcuesChanged() {
     VERIFY_OR_DEBUG_ASSERT(m_pHotcuesModel != nullptr) {
         return;
     }
+    VERIFY_OR_DEBUG_ASSERT(m_pMemoryCuesModel != nullptr) {
+        return;
+    }
 
     QList<CuePointer> hotcues;
+    QList<CuePointer> memoryCues;
 
     const TrackPointer pTrack = m_pCurrentTrack;
     if (pTrack) {
         const auto& cuePoints = pTrack->getCuePoints();
         for (const auto& cuePoint : cuePoints) {
-            if (cuePoint->getHotCue() == Cue::kNoHotCue)
-                continue;
-            hotcues.append(cuePoint);
+            if (cuePoint->getType() == mixxx::CueType::MemoryCue) {
+                memoryCues.append(cuePoint);
+            } else if (cuePoint->getHotCue() != Cue::kNoHotCue) {
+                hotcues.append(cuePoint);
+            }
         }
     }
+    std::sort(memoryCues.begin(),
+            memoryCues.end(),
+            [](const auto& pLeft, const auto& pRight) {
+                return pLeft->getPosition() < pRight->getPosition();
+            });
     m_pHotcuesModel->setCues(hotcues);
+    m_pMemoryCuesModel->setCues(memoryCues);
     emit cuesChanged();
 }
 

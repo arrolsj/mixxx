@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "engine/engine.h"
+#include "qml/qmlcuesmodel.h"
 #include "test/mixxxtest.h"
 #include "util/color/color.h"
 #include "util/color/predefinedcolorpalettes.h"
@@ -52,4 +53,42 @@ TEST(CueTest, ConvertCueInfoToCueRoundtrip) {
     EXPECT_EQ(cueInfo1, cueInfo2);
 }
 
+TEST(CueTest, MemoryCueIsDisplayOnlyMarkerWithoutHotcueSlot) {
+    const Cue cue(
+            CueType::MemoryCue,
+            Cue::kNoHotCue,
+            audio::FramePos(1234),
+            audio::kInvalidFramePos,
+            PredefinedColorPalettes::kDefaultCueColor);
+
+    EXPECT_EQ(CueType::MemoryCue, cue.getType());
+    EXPECT_EQ(Cue::kNoHotCue, cue.getHotCue());
+    EXPECT_FALSE(cue.getEndPosition().isValid());
+}
+
+TEST(CueTest, QmlCueModelExposesColorAndTransparentFallback) {
+    qml::QmlCuesModel model;
+    CuePointer coloredCue(new Cue(
+            CueType::HotCue,
+            0,
+            audio::FramePos(1234),
+            audio::kInvalidFramePos,
+            RgbColor(0xF87090)));
+    CuePointer uncoloredCue(new Cue(
+            CueType::MemoryCue,
+            Cue::kNoHotCue,
+            audio::FramePos(5678),
+            audio::kInvalidFramePos,
+            PredefinedColorPalettes::kDefaultCueColor));
+    model.setCues({coloredCue, uncoloredCue});
+
+    EXPECT_EQ(QByteArray("color"),
+            model.roleNames().value(qml::QmlCuesModel::ColorRole));
+    EXPECT_EQ(QColor(0xF8, 0x70, 0x90),
+            model.data(model.index(0, 0), qml::QmlCuesModel::ColorRole)
+                    .value<QColor>());
+    EXPECT_EQ(QColor(0, 0, 0, 0),
+            model.data(model.index(1, 0), qml::QmlCuesModel::ColorRole)
+                    .value<QColor>());
+}
 } // namespace mixxx
