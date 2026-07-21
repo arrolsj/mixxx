@@ -2915,6 +2915,7 @@ endif()
 if(QML)
   list(APPEND QT_EXTRA_COMPONENTS "Quick")
   list(APPEND QT_EXTRA_COMPONENTS "LabsQmlModels")
+  list(APPEND QT_EXTRA_COMPONENTS "LabsFolderListModel")
   list(APPEND QT_EXTRA_COMPONENTS "QuickControls2")
   list(APPEND QT_EXTRA_COMPONENTS "QuickControls2Impl")
   list(APPEND QT_EXTRA_COMPONENTS "QuickLayouts")
@@ -2922,6 +2923,7 @@ if(QML)
   list(APPEND QT_EXTRA_COMPONENTS "QuickTemplates2")
   list(APPEND QT_EXTRA_COMPONENTS "QuickWidgets")
   list(APPEND QT_EXTRA_COMPONENTS "ShaderTools")
+  list(APPEND QT_EXTRA_COMPONENTS "VirtualKeyboard")
   if(QT_VERSION VERSION_GREATER_EQUAL 6.7)
     list(APPEND QT_EXTRA_COMPONENTS "QuickControls2Basic")
     list(APPEND QT_EXTRA_COMPONENTS "QuickControls2BasicStyleImpl")
@@ -3233,6 +3235,12 @@ else()
         DESTINATION "${MIXXX_INSTALL_DATADIR}"
         COMPONENT applocal)
 
+      install(IMPORTED_RUNTIME_ARTIFACTS
+        Qt${QT_VERSION_MAJOR}::VirtualKeyboard
+        Qt${QT_VERSION_MAJOR}::LabsFolderListModel
+        DESTINATION "${MIXXX_INSTALL_DATADIR}"
+        COMPONENT applocal)
+
       #install qml6-module-qt5compat-graphicaleffects
       install(
         DIRECTORY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/Qt6/qml/Qt5Compat/GraphicalEffects"
@@ -3249,6 +3257,18 @@ else()
       install(
         DIRECTORY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/Qt6/qml/QtQuick/Controls"
         DESTINATION "${MIXXX_INSTALL_DATADIR}/Qt6/qml/QtQuick"
+        COMPONENT applocal)
+
+      # install qml6-module-qtquick-virtualkeyboard
+      install(
+        DIRECTORY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/Qt6/qml/QtQuick/VirtualKeyboard"
+        DESTINATION "${MIXXX_INSTALL_DATADIR}/Qt6/qml/QtQuick"
+        COMPONENT applocal)
+
+      # install qml6-module-qt-labs-folderlistmodel
+      install(
+        DIRECTORY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/Qt6/qml/Qt/labs/folderlistmodel"
+        DESTINATION "${MIXXX_INSTALL_DATADIR}/Qt6/qml/Qt/labs"
         COMPONENT applocal)
 
       # install qml6-module-qtquick-layouts
@@ -3293,6 +3313,12 @@ else()
       install(IMPORTED_RUNTIME_ARTIFACTS Qt${QT_VERSION_MAJOR}::QWindowsIntegrationPlugin
         DESTINATION "${MIXXX_INSTALL_DATADIR}/platforms"
         COMPONENT applocal)
+
+      install(
+        DIRECTORY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/Qt6/plugins/platforminputcontexts/"
+        DESTINATION "${MIXXX_INSTALL_DATADIR}/platforminputcontexts"
+        COMPONENT applocal
+        FILES_MATCHING PATTERN "*virtualkeyboard*")
       if(QT_VERSION VERSION_LESS 6.7)
         install(IMPORTED_RUNTIME_ARTIFACTS Qt${QT_VERSION_MAJOR}::QWindowsVistaStylePlugin
           DESTINATION "${MIXXX_INSTALL_DATADIR}/styles"
