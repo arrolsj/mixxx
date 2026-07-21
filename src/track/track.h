@@ -285,6 +285,11 @@ class Track : public QObject {
 
     ConstWaveformPointer getWaveformSummary() const;
     void setWaveformSummary(ConstWaveformPointer pWaveform);
+    mixxx::waveform::RekordboxThreeBandWaveformsPointer
+    getRekordboxThreeBandWaveforms() const;
+    void setRekordboxThreeBandWaveforms(
+            mixxx::waveform::RekordboxThreeBandWaveformsPointer pWaveforms);
+
 
     /// Get the track's main cue point
     mixxx::audio::FramePos getMainCuePosition() const;
@@ -441,6 +446,7 @@ class Track : public QObject {
     void waveformUpdated();
     void waveformSummaryUpdated();
     void coverArtUpdated();
+    void rekordboxThreeBandWaveformsUpdated();
     void beatsUpdated();
     void replayGainUpdated(mixxx::ReplayGain replayGain);
     // This signal indicates that ReplayGain is being adjusted, and pregains should be
@@ -577,6 +583,8 @@ class Track : public QObject {
     ConstWaveformPointer m_waveform;
     ConstWaveformPointer m_waveformSummary;
 
+    mixxx::waveform::RekordboxThreeBandWaveformsPointer
+            m_pRekordboxThreeBandWaveforms;
     mixxx::BeatsImporterPointer m_pBeatsImporterPending;
     std::unique_ptr<mixxx::CueInfoImporter> m_pCueInfoImporterPending;
 

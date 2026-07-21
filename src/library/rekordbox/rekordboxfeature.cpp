@@ -1070,6 +1070,92 @@ void setHotCue(TrackPointer track,
         pCue->setColor(*color);
     }
 }
+std::vector<mixxx::waveform::RekordboxThreeBandColumn>
+decodeRekordboxThreeBandEntries(
+        const std::string& entries,
+        uint32_t entryCount,
+        uint32_t entrySize) {
+    if (entrySize < 3) {
+        return {};
+    }
+
+    const std::size_t availableEntries = entries.size() / entrySize;
+    const std::size_t count = std::min<std::size_t>(
+            static_cast<std::size_t>(entryCount), availableEntries);
+    std::vector<mixxx::waveform::RekordboxThreeBandColumn> columns;
+    columns.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t offset = index * entrySize;
+        columns.push_back({
+                static_cast<std::uint8_t>(
+                        static_cast<unsigned char>(entries[offset])),
+                static_cast<std::uint8_t>(
+                        static_cast<unsigned char>(entries[offset + 1])),
+                static_cast<std::uint8_t>(
+                        static_cast<unsigned char>(entries[offset + 2])),
+        });
+    }
+    return columns;
+}
+
+void readRekordboxThreeBandWaveforms(
+        const TrackPointer& track, const QString& anlzPath) {
+    if (!track || !QFile(anlzPath).exists()) {
+        return;
+    }
+
+    try {
+        std::ifstream stream(anlzPath.toStdString(), std::ifstream::binary);
+        if (!stream.is_open()) {
+            return;
+        }
+        kaitai::kstream kaitaiStream(&stream);
+        rekordbox_anlz_t anlz(&kaitaiStream);
+        auto pWaveforms =
+                QSharedPointer<mixxx::waveform::RekordboxThreeBandWaveforms>::create();
+
+        for (const auto& section : *anlz.sections()) {
+            switch (section->fourcc()) {
+            case rekordbox_anlz_t::SECTION_TAGS_WAVE_3BAND_PREVIEW: {
+                const auto* pTag = static_cast<
+                        rekordbox_anlz_t::wave_3band_preview_tag_t*>(
+                        section->body());
+                pWaveforms->preview = decodeRekordboxThreeBandEntries(
+                        pTag->entries(),
+                        pTag->len_entries(),
+                        pTag->len_entry_bytes());
+                break;
+            }
+            case rekordbox_anlz_t::SECTION_TAGS_WAVE_3BAND_SCROLL: {
+                const auto* pTag = static_cast<
+                        rekordbox_anlz_t::wave_3band_scroll_tag_t*>(
+                        section->body());
+                pWaveforms->detail = decodeRekordboxThreeBandEntries(
+                        pTag->entries(),
+                        pTag->len_entries(),
+                        pTag->len_entry_bytes());
+                break;
+            }
+            default:
+                break;
+            }
+        }
+
+        if (!pWaveforms->empty()) {
+            track->setRekordboxThreeBandWaveforms(pWaveforms);
+            qDebug() << "Loaded read-only Rekordbox 3-band waveforms from"
+                     << anlzPath << "preview columns" << pWaveforms->preview.size()
+                     << "detail columns" << pWaveforms->detail.size();
+        }
+    } catch (const std::exception& exception) {
+        qWarning() << "Unable to read Rekordbox 3-band waveform from"
+                   << anlzPath << exception.what();
+    } catch (...) {
+        qWarning() << "Unable to read Rekordbox 3-band waveform from"
+                   << anlzPath;
+    }
+}
+
 
 void readAnalyze(TrackPointer track,
         mixxx::audio::SampleRate sampleRate,
@@ -1489,6 +1575,12 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
         readAnalyze(track, sampleRate, timingOffset, false, anlzPathExt);
     } else {
         readAnalyze(track, sampleRate, timingOffset, false, anlzPath);
+    }
+
+    if (anlzPath.length() >= 3) {
+        const QString anlzPath2Ex =
+                anlzPath.left(anlzPath.length() - 3) + QStringLiteral("2EX");
+        readRekordboxThreeBandWaveforms(track, anlzPath2Ex);
     }
 
     // Assume that the key of the file the has been analyzed in Recordbox is correct

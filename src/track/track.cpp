@@ -935,6 +935,17 @@ void Track::setWaveformSummary(ConstWaveformPointer pWaveform) {
     m_waveformSummary = pWaveform;
     emit waveformSummaryUpdated();
 }
+mixxx::waveform::RekordboxThreeBandWaveformsPointer
+Track::getRekordboxThreeBandWaveforms() const {
+    return m_pRekordboxThreeBandWaveforms;
+}
+
+void Track::setRekordboxThreeBandWaveforms(
+        mixxx::waveform::RekordboxThreeBandWaveformsPointer pWaveforms) {
+    m_pRekordboxThreeBandWaveforms = std::move(pWaveforms);
+    emit rekordboxThreeBandWaveformsUpdated();
+}
+
 
 void Track::setMainCuePosition(mixxx::audio::FramePos position) {
     auto locked = lockMutex(&m_qMutex);

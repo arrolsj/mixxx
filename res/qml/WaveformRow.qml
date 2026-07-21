@@ -16,6 +16,7 @@ Item {
 
     property string group // required
     property var deckPlayer: Mixxx.PlayerManager.getPlayer(group)
+    property string waveformMode: "RGB"
 
     Item {
         id: waveformContainer
@@ -59,6 +60,55 @@ Item {
             group: root.group
             key: "waveform_zoom"
         }
+        Mixxx.ControlProxy {
+            id: filterWaveformEnableControl
+
+            group: root.group
+            key: "filterWaveformEnable"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterHighControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "parameter3"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterHighKillControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "button_parameter3"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterMidControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "parameter2"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterMidKillControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "button_parameter2"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterLowControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "parameter1"
+        }
+
+        Mixxx.ControlProxy {
+            id: filterLowKillControl
+
+            group: "[EqualizerRack1_" + root.group + "_Effect1]"
+            key: "button_parameter1"
+        }
+
 
         Mixxx.ControlProxy {
             id: introStartPosition
@@ -149,9 +199,18 @@ Item {
             rateRatio: rateRatioControl.value
             playMarkerPosition: playMarker.screenPosition
             axesColor: "#FFFFFF"
-            highColor: "#0000FF"
-            midColor: "#00FF00"
-            lowColor: "#FF0000"
+            renderer: root.waveformMode === "3-BAND"
+                    ? Mixxx.ViewportWaveform.Renderer.ThreeBand
+                    : Mixxx.ViewportWaveform.Renderer.RGB
+            highColor: root.waveformMode === "3-BAND" ? "#F4F7FB" : "#0000FF"
+            midColor: root.waveformMode === "3-BAND" ? "#F3A51F" : "#00FF00"
+            lowColor: root.waveformMode === "3-BAND" ? "#2F80FF" : "#FF0000"
+            highGain: filterWaveformEnableControl.value
+                    ? (filterHighKillControl.value ? 0 : filterHighControl.value) : 1
+            midGain: filterWaveformEnableControl.value
+                    ? (filterMidKillControl.value ? 0 : filterMidControl.value) : 1
+            lowGain: filterWaveformEnableControl.value
+                    ? (filterLowKillControl.value ? 0 : filterLowControl.value) : 1
             visible: root.deckPlayer.isLoaded
         }
 

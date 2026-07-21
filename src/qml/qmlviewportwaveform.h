@@ -27,6 +27,11 @@ class QmlViewportWaveform : public QQuickItem {
     Q_PROPERTY(QColor highColor READ highColor WRITE setHighColor NOTIFY highColorChanged)
     Q_PROPERTY(QColor midColor READ midColor WRITE setMidColor NOTIFY midColorChanged)
     Q_PROPERTY(QColor lowColor READ lowColor WRITE setLowColor NOTIFY lowColorChanged)
+    Q_PROPERTY(Renderer renderer READ renderer WRITE setRenderer NOTIFY rendererChanged)
+    Q_PROPERTY(double highGain READ highGain WRITE setHighGain NOTIFY highGainChanged)
+    Q_PROPERTY(double midGain READ midGain WRITE setMidGain NOTIFY midGainChanged)
+    Q_PROPERTY(double lowGain READ lowGain WRITE setLowGain NOTIFY lowGainChanged)
+
     Q_PROPERTY(double trackWidth READ trackWidth NOTIFY trackWidthChanged)
     Q_PROPERTY(double contentX READ contentX NOTIFY contentXChanged)
     QML_NAMED_ELEMENT(ViewportWaveform)
@@ -34,6 +39,12 @@ class QmlViewportWaveform : public QQuickItem {
   public:
     explicit QmlViewportWaveform(QQuickItem* parent = nullptr);
     ~QmlViewportWaveform() override = default;
+    enum class Renderer {
+        RGB = 1,
+        ThreeBand = 2,
+    };
+    Q_ENUM(Renderer)
+
 
     QmlPlayerProxy* player() const;
     void setPlayer(QmlPlayerProxy* pPlayer);
@@ -58,6 +69,15 @@ class QmlViewportWaveform : public QQuickItem {
 
     double trackWidth() const;
     double contentX() const;
+    Renderer renderer() const;
+    void setRenderer(Renderer renderer);
+    double highGain() const;
+    void setHighGain(double gain);
+    double midGain() const;
+    void setMidGain(double gain);
+    double lowGain() const;
+    void setLowGain(double gain);
+
 
   signals:
     void playerChanged();
@@ -71,6 +91,11 @@ class QmlViewportWaveform : public QQuickItem {
     void lowColorChanged();
     void trackWidthChanged();
     void contentXChanged();
+
+    void rendererChanged();
+    void highGainChanged();
+    void midGainChanged();
+    void lowGainChanged();
 
   protected:
     QSGNode* updatePaintNode(
@@ -97,8 +122,18 @@ class QmlViewportWaveform : public QQuickItem {
     double m_displayPosition{0.0};
     double m_zoom{7.0};
     double m_rateRatio{1.0};
+    waveform::RekordboxThreeBandWaveformsPointer
+            m_pRekordboxThreeBandWaveforms;
+    float m_rekordboxPreviewReference{
+            waveform::kMixxxThreeBandReference};
+    float m_rekordboxDetailReference{
+            waveform::kMixxxThreeBandReference};
     double m_playMarkerPosition{0.5};
     QColor m_axesColor{Qt::white};
+    Renderer m_renderer{Renderer::RGB};
+    double m_highGain{1.0};
+    double m_midGain{1.0};
+    double m_lowGain{1.0};
     QColor m_highColor{Qt::blue};
     QColor m_midColor{Qt::green};
     QColor m_lowColor{Qt::red};

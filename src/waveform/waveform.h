@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QMutex>
 #include <QSharedPointer>
+#include <cstdint>
 #include <QString>
 #include <vector>
 
@@ -13,6 +14,32 @@
 
 enum FilterIndex { Low = 0, Mid = 1, High = 2, FilterCount = 3};
 enum ChannelIndex { Left = 0, Right = 1, ChannelCount = 2};
+namespace mixxx::waveform {
+
+/// One mono column from Rekordbox PWV6/PWV7 analysis data. Rekordbox stores
+/// the bytes in mid, high, low order.
+struct RekordboxThreeBandColumn {
+    std::uint8_t mid{0};
+    std::uint8_t high{0};
+    std::uint8_t low{0};
+};
+
+/// Session-only, read-only waveform data imported from a Rekordbox .2EX
+/// analysis file. This intentionally has no database or metadata serializer:
+/// LastCUE must never write derived state back to Rekordbox media.
+struct RekordboxThreeBandWaveforms {
+    std::vector<RekordboxThreeBandColumn> preview;
+    std::vector<RekordboxThreeBandColumn> detail;
+
+    bool empty() const {
+        return preview.empty() && detail.empty();
+    }
+};
+
+using RekordboxThreeBandWaveformsPointer =
+        QSharedPointer<const RekordboxThreeBandWaveforms>;
+
+} // namespace mixxx::waveform
 
 union WaveformData {
     struct {

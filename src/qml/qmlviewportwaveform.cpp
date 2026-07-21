@@ -48,6 +48,10 @@ mixxx::waveform::WaveformRgbColorF toColorF(const QColor& color) {
     };
 }
 
+constexpr uchar kLowBandAlpha = 230;
+constexpr uchar kMidBandAlpha = 218;
+constexpr uchar kHighBandAlpha = 242;
+
 } // namespace
 
 namespace mixxx::qml {
@@ -208,6 +212,61 @@ void QmlViewportWaveform::setLowColor(const QColor& color) {
     emit lowColorChanged();
     update();
 }
+QmlViewportWaveform::Renderer QmlViewportWaveform::renderer() const {
+    return m_renderer;
+}
+
+void QmlViewportWaveform::setRenderer(Renderer renderer) {
+    if (m_renderer == renderer) {
+        return;
+    }
+    m_renderer = renderer;
+    emit rendererChanged();
+    update();
+}
+
+double QmlViewportWaveform::highGain() const {
+    return m_highGain;
+}
+
+void QmlViewportWaveform::setHighGain(double gain) {
+    const double normalized = std::max(gain, 0.0);
+    if (fuzzyEqual(m_highGain, normalized)) {
+        return;
+    }
+    m_highGain = normalized;
+    emit highGainChanged();
+    update();
+}
+
+double QmlViewportWaveform::midGain() const {
+    return m_midGain;
+}
+
+void QmlViewportWaveform::setMidGain(double gain) {
+    const double normalized = std::max(gain, 0.0);
+    if (fuzzyEqual(m_midGain, normalized)) {
+        return;
+    }
+    m_midGain = normalized;
+    emit midGainChanged();
+    update();
+}
+
+double QmlViewportWaveform::lowGain() const {
+    return m_lowGain;
+}
+
+void QmlViewportWaveform::setLowGain(double gain) {
+    const double normalized = std::max(gain, 0.0);
+    if (fuzzyEqual(m_lowGain, normalized)) {
+        return;
+    }
+    m_lowGain = normalized;
+    emit lowGainChanged();
+    update();
+}
+
 
 double QmlViewportWaveform::trackWidth() const {
     return m_viewportMetrics.trackWidth;
@@ -244,6 +303,10 @@ void QmlViewportWaveform::setCurrentTrack(TrackPointer pTrack) {
                 &Track::waveformUpdated,
                 this,
                 &QmlViewportWaveform::slotWaveformUpdated);
+        connect(m_pCurrentTrack.get(),
+                &Track::rekordboxThreeBandWaveformsUpdated,
+                this,
+                &QmlViewportWaveform::slotWaveformUpdated);
     }
     slotWaveformUpdated();
 }
@@ -252,6 +315,17 @@ void QmlViewportWaveform::slotWaveformUpdated() {
     m_pWaveform = m_pCurrentTrack != nullptr
             ? m_pCurrentTrack->getWaveform()
             : ConstWaveformPointer{};
+    m_pRekordboxThreeBandWaveforms = m_pCurrentTrack != nullptr
+            ? m_pCurrentTrack->getRekordboxThreeBandWaveforms()
+            : waveform::RekordboxThreeBandWaveformsPointer{};
+    m_rekordboxPreviewReference = m_pRekordboxThreeBandWaveforms
+            ? waveform::calculateRekordboxThreeBandReference(
+                      m_pRekordboxThreeBandWaveforms->preview)
+            : waveform::kMixxxThreeBandReference;
+    m_rekordboxDetailReference = m_pRekordboxThreeBandWaveforms
+            ? waveform::calculateRekordboxThreeBandReference(
+                      m_pRekordboxThreeBandWaveforms->detail)
+            : waveform::kMixxxThreeBandReference;
     updateViewportMetrics();
     update();
 }
@@ -325,16 +399,41 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
 
     const int dataSize = pWaveform->getDataSize();
     const int completion = pWaveform->getCompletion();
-    const std::vector<waveform::WaveformRgbColumn> columns =
-            waveform::sampleWaveformRgbColumns(pWaveform->data(),
-                    dataSize,
-                    completion,
-                    viewport,
-                    toColorF(m_lowColor),
-                    toColorF(m_midColor),
-                    toColorF(m_highColor));
+    std::vector<waveform::WaveformRgbColumn> rgbColumns;
+    std::vector<waveform::WaveformThreeBandColumn> threeBandColumns;
+    const bool renderThreeBand = m_renderer == Renderer::ThreeBand;
+    float threeBandReference = waveform::kMixxxThreeBandReference;
+    if (renderThreeBand) {
+        const waveform::RekordboxThreeBandWaveformsPointer pRekordbox =
+                m_pRekordboxThreeBandWaveforms;
+        if (pRekordbox && !pRekordbox->empty()) {
+            const bool useDetail = !pRekordbox->detail.empty();
+            const auto& source = useDetail
+                    ? pRekordbox->detail
+                    : pRekordbox->preview;
+            threeBandReference = useDetail
+                    ? m_rekordboxDetailReference
+                    : m_rekordboxPreviewReference;
+            threeBandColumns = waveform::sampleRekordboxThreeBandColumns(
+                    source, viewport);
+        } else {
+            threeBandColumns = waveform::sampleWaveformThreeBandColumns(
+                    pWaveform->data(), dataSize, completion, viewport);
+        }
+    } else {
+        rgbColumns = waveform::sampleWaveformRgbColumns(pWaveform->data(),
+                dataSize,
+                completion,
+                viewport,
+                toColorF(m_lowColor),
+                toColorF(m_midColor),
+                toColorF(m_highColor));
+    }
+    const int columnCount = static_cast<int>(renderThreeBand
+                    ? threeBandColumns.size()
+                    : rgbColumns.size());
 
-    if (columns.empty()) {
+    if (columnCount == 0) {
         delete pOldNode;
         return nullptr;
     }
@@ -355,7 +454,7 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
     QSGGeometry* pGeometry = pNode->geometry();
     constexpr int kVerticesPerRectangle = 6;
     const int vertexCount = kVerticesPerRectangle *
-            (static_cast<int>(columns.size()) + 1);
+            (columnCount * (renderThreeBand ? 3 : 1) + 1);
     if (pGeometry->vertexCount() != vertexCount) {
         pGeometry->allocate(vertexCount);
     }
@@ -377,26 +476,76 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
             static_cast<uchar>(m_axesColor.blue()),
             static_cast<uchar>(m_axesColor.alpha()));
 
-    const float amplitudeToHeight = halfHeight / 255.0f * 0.6f;
     const float halfPhysicalPixel =
             static_cast<float>(0.5 / m_devicePixelRatio);
-    for (int columnIndex = 0;
-            columnIndex < static_cast<int>(columns.size());
-            ++columnIndex) {
-        const waveform::WaveformRgbColumn& column =
-                columns[static_cast<std::size_t>(columnIndex)];
-        const float centerX =
-                static_cast<float>(columnIndex / m_devicePixelRatio);
-        addRectangle(pVertices,
-                &vertexIndex,
-                centerX - halfPhysicalPixel,
-                halfHeight - amplitudeToHeight * column.leftAmplitude,
-                centerX + halfPhysicalPixel,
-                halfHeight + amplitudeToHeight * column.rightAmplitude,
-                colorByte(column.red),
-                colorByte(column.green),
-                colorByte(column.blue),
-                255);
+    if (!renderThreeBand) {
+        const float amplitudeToHeight = halfHeight / 255.0f * 0.6f;
+        for (int columnIndex = 0;
+                columnIndex < columnCount;
+                ++columnIndex) {
+            const waveform::WaveformRgbColumn& column =
+                    rgbColumns[static_cast<std::size_t>(columnIndex)];
+            const float centerX =
+                    static_cast<float>(columnIndex / m_devicePixelRatio);
+            addRectangle(pVertices,
+                    &vertexIndex,
+                    centerX - halfPhysicalPixel,
+                    halfHeight - amplitudeToHeight * column.leftAmplitude,
+                    centerX + halfPhysicalPixel,
+                    halfHeight + amplitudeToHeight * column.rightAmplitude,
+                    colorByte(column.red),
+                    colorByte(column.green),
+                    colorByte(column.blue),
+                    255);
+        }
+    } else {
+        for (int columnIndex = 0;
+                columnIndex < columnCount;
+                ++columnIndex) {
+            const waveform::WaveformThreeBandColumn& column =
+                    threeBandColumns[static_cast<std::size_t>(columnIndex)];
+            const float centerX =
+                    static_cast<float>(columnIndex / m_devicePixelRatio);
+            const auto appendBand = [&](const QColor& color,
+                                            uchar alpha,
+                                            float gain,
+                                            float leftAmplitude,
+                                            float rightAmplitude) {
+                addRectangle(pVertices,
+                        &vertexIndex,
+                        centerX - halfPhysicalPixel,
+                        halfHeight - halfHeight *
+                                waveform::threeBandDisplayAmplitude(
+                                        leftAmplitude, threeBandReference) *
+                                gain,
+                        centerX + halfPhysicalPixel,
+                        halfHeight + halfHeight *
+                                waveform::threeBandDisplayAmplitude(
+                                        rightAmplitude, threeBandReference) *
+                                gain,
+                        static_cast<uchar>(color.red()),
+                        static_cast<uchar>(color.green()),
+                        static_cast<uchar>(color.blue()),
+                        alpha);
+            };
+            // Rekordbox composes all bands on one center axis. Low and mid
+            // blend into brown; high is nearly opaque and is painted last.
+            appendBand(m_lowColor,
+                    kLowBandAlpha,
+                    static_cast<float>(m_lowGain),
+                    column.leftLow,
+                    column.rightLow);
+            appendBand(m_midColor,
+                    kMidBandAlpha,
+                    static_cast<float>(m_midGain),
+                    column.leftMid,
+                    column.rightMid);
+            appendBand(m_highColor,
+                    kHighBandAlpha,
+                    static_cast<float>(m_highGain),
+                    column.leftHigh,
+                    column.rightHigh);
+        }
     }
 
     pGeometry->markVertexDataDirty();

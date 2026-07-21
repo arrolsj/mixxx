@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -22,6 +23,72 @@ struct WaveformRgbColumn {
     float green{0.0f};
     float blue{0.0f};
 };
+struct WaveformThreeBandColumn {
+    float leftLow{0.0f};
+    float rightLow{0.0f};
+    float leftMid{0.0f};
+    float rightMid{0.0f};
+    float leftHigh{0.0f};
+    float rightHigh{0.0f};
+};
+
+/// PWV7 uses a nonlinear display scale. Keep the transfer independent from
+/// viewport columns: a whole-track robust reference preserves the source
+/// dynamics, while this curve suppresses ordinary energy and leaves headroom
+/// for transients above the 99th percentile.
+constexpr float kThreeBandDisplayHeightScale = 0.78f;
+constexpr float kThreeBandDisplayCurveStrength = 1.5f;
+constexpr float kMixxxThreeBandReference = 255.0f;
+constexpr float kMinimumRekordboxThreeBandReference = 64.0f;
+
+inline float calculateRekordboxThreeBandReference(
+        const std::vector<RekordboxThreeBandColumn>& source) {
+    if (source.empty()) {
+        return kMixxxThreeBandReference;
+    }
+
+    std::array<std::size_t, 256> histogram{};
+    for (const RekordboxThreeBandColumn& column : source) {
+        ++histogram[std::max({column.low, column.mid, column.high})];
+    }
+
+    constexpr double kRobustPercentile = 0.99;
+    const std::size_t target = std::max<std::size_t>(
+            1, static_cast<std::size_t>(
+                       std::ceil(source.size() * kRobustPercentile)));
+    std::size_t cumulative = 0;
+    for (std::size_t value = 0; value < histogram.size(); ++value) {
+        cumulative += histogram[value];
+        if (cumulative >= target) {
+            return std::clamp(static_cast<float>(value),
+                    kMinimumRekordboxThreeBandReference,
+                    kMixxxThreeBandReference);
+        }
+    }
+    return kMixxxThreeBandReference;
+}
+
+inline float threeBandDisplayAmplitude(float value, float reference) {
+    if (value <= 0.0f) {
+        return 0.0f;
+    }
+    const float normalized = value / std::max(reference, 1.0f);
+    return kThreeBandDisplayHeightScale *
+            (1.0f - std::exp(-kThreeBandDisplayCurveStrength *
+                    normalized * normalized));
+}
+
+inline float peakPreservingRms(
+        double squareSum, float maximum, std::size_t count) {
+    if (count == 0) {
+        return 0.0f;
+    }
+    const float rms = static_cast<float>(
+            std::sqrt(squareSum / static_cast<double>(count)));
+    constexpr float kPeakContribution = 0.35f;
+    return rms + kPeakContribution * (maximum - rms);
+}
+
 
 /// Immutable mapping between a bounded viewport and the global waveform pixel
 /// grid. The global integer pixel index is what makes waveform columns stable:
@@ -169,6 +236,169 @@ inline std::vector<WaveformRgbColumn> sampleWaveformRgbColumns(
         column.blue = blue;
     }
 
+    return columns;
+}
+
+inline std::vector<WaveformThreeBandColumn> sampleWaveformThreeBandColumns(
+        const WaveformData* data,
+        int dataSize,
+        int completion,
+        const WaveformRgbViewportMetrics& viewport) {
+    if (data == nullptr || dataSize < 2 || !viewport.isValid()) {
+        return {};
+    }
+
+    std::vector<WaveformThreeBandColumn> columns(
+            static_cast<std::size_t>(viewport.physicalWidth));
+    int completedDataSize = std::clamp(completion, 0, dataSize);
+    completedDataSize -= completedDataSize % 2;
+    const int completedVisualFrames = completedDataSize / 2;
+    const double halfSamplingRange =
+            viewport.visualFramesPerPhysicalPixel / 2.0;
+
+    for (int columnIndex = 0;
+            columnIndex < viewport.physicalWidth;
+            ++columnIndex) {
+        const std::int64_t globalPixel =
+                viewport.firstGlobalPixel + columnIndex;
+        const double centerVisualFrame =
+                static_cast<double>(globalPixel) *
+                viewport.visualFramesPerPhysicalPixel;
+        const long rawStart =
+                std::lround(centerVisualFrame - halfSamplingRange);
+        const long rawStop =
+                std::lround(centerVisualFrame + halfSamplingRange);
+        const long requestedStop = std::max(rawStop, rawStart + 1);
+        const int visualFrameStart = static_cast<int>(
+                std::clamp<long>(rawStart, 0, completedVisualFrames));
+        const int visualFrameStop = static_cast<int>(
+                std::clamp<long>(requestedStop, 0, completedVisualFrames));
+
+        double lowSquareSum[2]{0.0, 0.0};
+        double midSquareSum[2]{0.0, 0.0};
+        double highSquareSum[2]{0.0, 0.0};
+        float lowMaximum[2]{0.0f, 0.0f};
+        float midMaximum[2]{0.0f, 0.0f};
+        float highMaximum[2]{0.0f, 0.0f};
+        std::size_t sampleCount = 0;
+        for (int visualFrame = visualFrameStart;
+                visualFrame < visualFrameStop;
+                ++visualFrame) {
+            const int visualIndex = visualFrame * 2;
+            for (int channel = 0; channel < 2; ++channel) {
+                const WaveformData& value = data[visualIndex + channel];
+                const float low = value.filtered.low;
+                const float mid = value.filtered.mid;
+                const float high = value.filtered.high;
+                lowSquareSum[channel] += low * low;
+                midSquareSum[channel] += mid * mid;
+                highSquareSum[channel] += high * high;
+                lowMaximum[channel] = std::max(lowMaximum[channel], low);
+                midMaximum[channel] = std::max(midMaximum[channel], mid);
+                highMaximum[channel] = std::max(highMaximum[channel], high);
+            }
+            ++sampleCount;
+        }
+
+        WaveformThreeBandColumn& column =
+                columns[static_cast<std::size_t>(columnIndex)];
+        column.leftLow = peakPreservingRms(
+                lowSquareSum[0], lowMaximum[0], sampleCount);
+        column.rightLow = peakPreservingRms(
+                lowSquareSum[1], lowMaximum[1], sampleCount);
+        column.leftMid = peakPreservingRms(
+                midSquareSum[0], midMaximum[0], sampleCount);
+        column.rightMid = peakPreservingRms(
+                midSquareSum[1], midMaximum[1], sampleCount);
+        column.leftHigh = peakPreservingRms(
+                highSquareSum[0], highMaximum[0], sampleCount);
+        column.rightHigh = peakPreservingRms(
+                highSquareSum[1], highMaximum[1], sampleCount);
+    }
+    return columns;
+}
+
+inline std::vector<WaveformThreeBandColumn>
+sampleRekordboxThreeBandColumns(
+        const std::vector<RekordboxThreeBandColumn>& source,
+        const WaveformRgbViewportMetrics& viewport) {
+    if (source.empty() || !viewport.isValid()) {
+        return {};
+    }
+
+    std::vector<WaveformThreeBandColumn> columns(
+            static_cast<std::size_t>(viewport.physicalWidth));
+    const double halfSamplingRange =
+            viewport.visualFramesPerPhysicalPixel / 2.0;
+    const double sourcePerVisualFrame =
+            static_cast<double>(source.size()) /
+            static_cast<double>(viewport.visualFrameCount);
+
+    for (int columnIndex = 0;
+            columnIndex < viewport.physicalWidth;
+            ++columnIndex) {
+        const std::int64_t globalPixel =
+                viewport.firstGlobalPixel + columnIndex;
+        const double centerVisualFrame =
+                static_cast<double>(globalPixel) *
+                viewport.visualFramesPerPhysicalPixel;
+        const long rawStart =
+                std::lround(centerVisualFrame - halfSamplingRange);
+        const long rawStop =
+                std::lround(centerVisualFrame + halfSamplingRange);
+        const long requestedStop = std::max(rawStop, rawStart + 1);
+        const int visualFrameStart = static_cast<int>(std::clamp<long>(
+                rawStart, 0, viewport.visualFrameCount));
+        const int visualFrameStop = static_cast<int>(std::clamp<long>(
+                requestedStop, 0, viewport.visualFrameCount));
+        if (visualFrameStart >= visualFrameStop) {
+            continue;
+        }
+
+        const std::size_t sourceStart = std::min<std::size_t>(
+                static_cast<std::size_t>(std::floor(
+                        visualFrameStart * sourcePerVisualFrame)),
+                source.size());
+        const std::size_t sourceStop = std::min<std::size_t>(
+                std::max(sourceStart + 1,
+                        static_cast<std::size_t>(std::ceil(
+                                visualFrameStop * sourcePerVisualFrame))),
+                source.size());
+
+        double lowSquareSum = 0.0;
+        double midSquareSum = 0.0;
+        double highSquareSum = 0.0;
+        float lowMaximum = 0.0f;
+        float midMaximum = 0.0f;
+        float highMaximum = 0.0f;
+        for (std::size_t sourceIndex = sourceStart;
+                sourceIndex < sourceStop;
+                ++sourceIndex) {
+            const RekordboxThreeBandColumn& value = source[sourceIndex];
+            const float low = value.low;
+            const float mid = value.mid;
+            const float high = value.high;
+            lowSquareSum += low * low;
+            midSquareSum += mid * mid;
+            highSquareSum += high * high;
+            lowMaximum = std::max(lowMaximum, low);
+            midMaximum = std::max(midMaximum, mid);
+            highMaximum = std::max(highMaximum, high);
+        }
+        const std::size_t sampleCount = sourceStop - sourceStart;
+        const float low = peakPreservingRms(
+                lowSquareSum, lowMaximum, sampleCount);
+        const float mid = peakPreservingRms(
+                midSquareSum, midMaximum, sampleCount);
+        const float high = peakPreservingRms(
+                highSquareSum, highMaximum, sampleCount);
+
+        WaveformThreeBandColumn& column =
+                columns[static_cast<std::size_t>(columnIndex)];
+        column.leftLow = column.rightLow = low;
+        column.leftMid = column.rightMid = mid;
+        column.leftHigh = column.rightHigh = high;
+    }
     return columns;
 }
 

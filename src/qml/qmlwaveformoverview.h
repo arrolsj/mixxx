@@ -19,10 +19,13 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     Q_PROPERTY(mixxx::qml::QmlPlayerProxy* player READ getPlayer WRITE setPlayer
                     NOTIFY playerChanged REQUIRED)
     Q_PROPERTY(Channels channels READ getChannels WRITE setChannels NOTIFY channelsChanged)
-    Q_PROPERTY(Renderer renderer MEMBER m_renderer NOTIFY rendererChanged)
-    Q_PROPERTY(QColor colorHigh MEMBER m_colorHigh NOTIFY colorHighChanged)
-    Q_PROPERTY(QColor colorMid MEMBER m_colorMid NOTIFY colorMidChanged)
-    Q_PROPERTY(QColor colorLow MEMBER m_colorLow NOTIFY colorLowChanged)
+    Q_PROPERTY(Renderer renderer READ getRenderer WRITE setRenderer NOTIFY rendererChanged)
+    Q_PROPERTY(QColor colorHigh READ getColorHigh WRITE setColorHigh NOTIFY colorHighChanged)
+    Q_PROPERTY(QColor colorMid READ getColorMid WRITE setColorMid NOTIFY colorMidChanged)
+    Q_PROPERTY(QColor colorLow READ getColorLow WRITE setColorLow NOTIFY colorLowChanged)
+    Q_PROPERTY(double highGain READ getHighGain WRITE setHighGain NOTIFY highGainChanged)
+    Q_PROPERTY(double midGain READ getMidGain WRITE setMidGain NOTIFY midGainChanged)
+    Q_PROPERTY(double lowGain READ getLowGain WRITE setLowGain NOTIFY lowGainChanged)
     QML_NAMED_ELEMENT(WaveformOverview)
 
   public:
@@ -35,7 +38,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
 
     enum class Renderer {
         RGB = 1,
-        Filtered = 2,
+        ThreeBand = 2,
+        Filtered = ThreeBand,
     };
     Q_ENUM(Renderer)
 
@@ -49,6 +53,21 @@ class QmlWaveformOverview : public QQuickPaintedItem {
 
     void setChannels(Channels channels);
     Channels getChannels() const;
+    Renderer getRenderer() const;
+    void setRenderer(Renderer renderer);
+    QColor getColorHigh() const;
+    void setColorHigh(const QColor& color);
+    QColor getColorMid() const;
+    void setColorMid(const QColor& color);
+    QColor getColorLow() const;
+    void setColorLow(const QColor& color);
+    double getHighGain() const;
+    void setHighGain(double gain);
+    double getMidGain() const;
+    void setMidGain(double gain);
+    double getLowGain() const;
+    void setLowGain(double gain);
+
   private slots:
     void slotTrackLoaded(TrackPointer pLoadedTrack);
     void slotTrackLoading(TrackPointer pNewTrack, TrackPointer pOldTrack);
@@ -66,6 +85,9 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     void colorHighChanged(const QColor& color);
     void colorMidChanged(const QColor& color);
     void colorLowChanged(const QColor& color);
+    void highGainChanged();
+    void midGainChanged();
+    void lowGainChanged();
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
@@ -78,6 +100,11 @@ class QmlWaveformOverview : public QQuickPaintedItem {
             ConstWaveformPointer pWaveform,
             int completion) const;
     QColor getRgbPenColor(ConstWaveformPointer pWaveform, int completion) const;
+    void drawRekordboxThreeBand(QPainter* pPainter,
+            Channels channels,
+            const mixxx::waveform::RekordboxThreeBandColumn& column,
+            double offsetX,
+            float reference) const;
 
     QPointer<QmlPlayerProxy> m_pPlayer;
     TrackPointer m_pCurrentTrack;
@@ -86,6 +113,13 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     QColor m_colorHigh;
     QColor m_colorMid;
     QColor m_colorLow;
+    mixxx::waveform::RekordboxThreeBandWaveformsPointer
+            m_pRekordboxThreeBandWaveforms;
+    float m_rekordboxPreviewReference{255.0f};
+    float m_rekordboxDetailReference{255.0f};
+    double m_highGain{1.0};
+    double m_midGain{1.0};
+    double m_lowGain{1.0};
 };
 
 } // namespace qml
