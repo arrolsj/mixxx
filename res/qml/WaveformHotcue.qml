@@ -10,7 +10,7 @@ Item {
     required property color cueColor
     property bool isLoop: false
     property color loopColor: "#F8A030"
-    property real markerSize: 14
+    property real markerSize: 16
 
     readonly property color markerColor: root.isLoop
             ? root.loopColor
@@ -55,7 +55,7 @@ Item {
         Text {
             anchors.centerIn: parent
             color: "#071012"
-            font.pixelSize: 9
+            font.pixelSize: 10
             font.weight: Font.Bold
             text: root.hotcueLetter
         }

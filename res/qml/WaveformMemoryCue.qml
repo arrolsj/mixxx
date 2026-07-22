@@ -1,28 +1,29 @@
 import QtQuick 2.15
-import QtQuick.Shapes 1.15
 
 Item {
     id: root
 
     property color color: "#FF0000"
-    property real markerWidth: 10
-    property real markerHeight: 9
+    property real markerWidth: 12
+    property real markerHeight: 11
 
-    Shape {
+    Canvas {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         width: root.markerWidth
         height: root.markerHeight
+        antialiasing: true
 
-        ShapePath {
-            fillColor: root.color
-            strokeColor: "#081012"
-            strokeWidth: 1
-            startX: 0
-            startY: 0
-            PathLine { x: root.markerWidth; y: 0 }
-            PathLine { x: root.markerWidth / 2; y: root.markerHeight }
-            PathLine { x: 0; y: 0 }
+        onPaint: {
+            const context = getContext("2d");
+            context.clearRect(0, 0, width, height);
+            context.fillStyle = root.color;
+            context.beginPath();
+            context.moveTo(0, 0);
+            context.lineTo(width, 0);
+            context.lineTo(width / 2, height);
+            context.closePath();
+            context.fill();
         }
     }
 

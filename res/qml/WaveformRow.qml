@@ -142,32 +142,14 @@ Item {
         // exactly one column per physical viewport pixel. Each column is a
         // range maximum on a track-global pixel grid, matching the stable
         // QWidget RGB renderer without creating an unbounded item or texture.
-        Mixxx.ViewportWaveform {
-            id: viewportWaveform
-
-            anchors.fill: parent
-            player: root.deckPlayer
-            displayPosition: waveformContainer.displayedPlayPosition
-            zoom: zoomControl.value
-            rateRatio: rateRatioControl.value
-            playMarkerPosition: playMarker.screenPosition
-            axesColor: "#FFFFFF"
-            highColor: "#0000FF"
-            midColor: "#00FF00"
-            lowColor: "#FF0000"
-            visible: root.deckPlayer.isLoaded
-        }
-
         Item {
-            id: waveform
-
-            property real effectiveZoomFactor: waveformContainer.duration > 0
-                    ? width / waveformContainer.duration : 0
+            id: beatGrid
 
             width: viewportWaveform.trackWidth
             height: parent.height
             x: viewportWaveform.contentX
             visible: root.deckPlayer.isLoaded
+            z: 0
 
             Repeater {
                 model: root.deckPlayer.beatsModel
@@ -180,16 +162,16 @@ Item {
                     readonly property bool isDownbeat: beatNumber === 1
 
                     property real physicalPixel: 2 / Screen.devicePixelRatio
-                    property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * waveform.width
+                    property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * beatGrid.width
 
                     width: physicalPixel
-                    height: waveform.height
+                    height: beatGrid.height
                     opacity: beatLine.isDownbeat ? 0.9 : 0.65
                     // Snap the final global position, including contentX, so
                     // dashed lines stay crisp while sharing the waveform's
                     // viewport-driven track coordinate transform.
-                    x: Math.round((waveform.x + trackX) * Screen.devicePixelRatio) /
-                            Screen.devicePixelRatio - waveform.x - width / 2
+                    x: Math.round((beatGrid.x + trackX) * Screen.devicePixelRatio) /
+                            Screen.devicePixelRatio - beatGrid.x - width / 2
 
                     ShapePath {
                         strokeColor: beatLine.isDownbeat ? Theme.waveformDownbeatColor : Theme.waveformBeatColor
@@ -207,6 +189,36 @@ Item {
                     }
                 }
             }
+        }
+
+        Mixxx.ViewportWaveform {
+            id: viewportWaveform
+
+            anchors.fill: parent
+            player: root.deckPlayer
+            displayPosition: waveformContainer.displayedPlayPosition
+            zoom: zoomControl.value
+            rateRatio: rateRatioControl.value
+            playMarkerPosition: playMarker.screenPosition
+            axesColor: "#FFFFFF"
+            highColor: "#0000FF"
+            midColor: "#00FF00"
+            lowColor: "#FF0000"
+            visible: root.deckPlayer.isLoaded
+            z: 1
+        }
+
+        Item {
+            id: waveform
+
+            property real effectiveZoomFactor: waveformContainer.duration > 0
+                    ? width / waveformContainer.duration : 0
+
+            width: viewportWaveform.trackWidth
+            height: parent.height
+            x: viewportWaveform.contentX
+            visible: root.deckPlayer.isLoaded
+            z: 2
 
             Skin.WaveformIntroOutro {
                 id: intro
@@ -252,6 +264,7 @@ Item {
                     required property bool isLoop
                     required property int hotcueNumber
                     required property color color
+                    z: cue.isLoop ? 2 : 1
 
                     Skin.WaveformHotcue {
                         group: root.group
@@ -279,7 +292,7 @@ Item {
                     required property int startPosition
 
                     x: (startPosition * 2 / samplesControl.value) * waveform.width - width / 2
-                    width: 10
+                    width: 12
                     height: waveform.height
                     z: 3
 
