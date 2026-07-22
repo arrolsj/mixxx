@@ -20,6 +20,7 @@ class QmlLibrarySourceModel : public QIdentityProxyModel {
         IconNameRole,
         DataRole,
         HasChildrenRole,
+        DeviceIdRole,
     };
     Q_ENUM(Roles)
 
@@ -29,6 +30,12 @@ class QmlLibrarySourceModel : public QIdentityProxyModel {
     QHash<int, QByteArray> roleNames() const override;
 
     QModelIndex mapToSidebar(const QModelIndex& proxyIndex) const;
+    Q_INVOKABLE QModelIndex sourceIndexForDevice(
+            const QString& deviceId) const;
+
+  private:
+    QString deviceIdForSidebarIndex(
+            const QModelIndex& sidebarIndex) const;
 };
 
 } // namespace qml

@@ -1,5 +1,7 @@
 #include "qml/qmllibrarysourcemodel.h"
 
+#include <functional>
+
 #include "library/sidebarmodel.h"
 #include "moc_qmllibrarysourcemodel.cpp"
 #include "util/assert.h"
@@ -13,6 +15,7 @@ const QHash<int, QByteArray> kRoleNames = {
         {QmlLibrarySourceModel::IconNameRole, "iconName"},
         {QmlLibrarySourceModel::DataRole, "data"},
         {QmlLibrarySourceModel::HasChildrenRole, "hasChildren"},
+        {QmlLibrarySourceModel::DeviceIdRole, "deviceId"},
 };
 } // namespace
 
@@ -47,6 +50,8 @@ QVariant QmlLibrarySourceModel::data(const QModelIndex& proxyIndex, int role) co
         return pSidebarModel->data(sourceIndex, SidebarModel::DataRole);
     case HasChildrenRole:
         return pSidebarModel->hasChildren(sourceIndex);
+    case DeviceIdRole:
+        return deviceIdForSidebarIndex(sourceIndex);
     default:
         return QIdentityProxyModel::data(proxyIndex, role);
     }
@@ -61,6 +66,55 @@ QModelIndex QmlLibrarySourceModel::mapToSidebar(const QModelIndex& proxyIndex) c
         return {};
     }
     return mapToSource(proxyIndex);
+}
+
+QString QmlLibrarySourceModel::deviceIdForSidebarIndex(
+        const QModelIndex& sidebarIndex) const {
+    const auto* pSidebarModel = qobject_cast<const SidebarModel*>(sourceModel());
+    if (!pSidebarModel) {
+        return {};
+    }
+    QModelIndex current = sidebarIndex;
+    while (current.isValid()) {
+        const QVariantList data = pSidebarModel
+                                          ->data(current, SidebarModel::DataRole)
+                                          .toList();
+        if (data.size() > 2) {
+            return data.at(2).toString();
+        }
+        current = current.parent();
+    }
+    return {};
+}
+
+QModelIndex QmlLibrarySourceModel::sourceIndexForDevice(
+        const QString& deviceId) const {
+    if (deviceId.isEmpty()) {
+        return {};
+    }
+    const auto* pSidebarModel = qobject_cast<const SidebarModel*>(sourceModel());
+    if (!pSidebarModel) {
+        return {};
+    }
+
+    std::function<QModelIndex(const QModelIndex&)> findDevice =
+            [&](const QModelIndex& parent) -> QModelIndex {
+        const int rows = pSidebarModel->rowCount(parent);
+        for (int row = 0; row < rows; ++row) {
+            const QModelIndex candidate = pSidebarModel->index(row, 0, parent);
+            if (deviceIdForSidebarIndex(candidate) == deviceId) {
+                return candidate;
+            }
+            const QModelIndex nested = findDevice(candidate);
+            if (nested.isValid()) {
+                return nested;
+            }
+        }
+        return {};
+    };
+
+    const QModelIndex sidebarIndex = findDevice(QModelIndex());
+    return sidebarIndex.isValid() ? mapFromSource(sidebarIndex) : QModelIndex();
 }
 
 } // namespace qml

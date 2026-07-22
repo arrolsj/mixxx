@@ -15,7 +15,8 @@ QmlLibraryProxy::QmlLibraryProxy(std::shared_ptr<Library> pLibrary, QObject* par
         : QObject(parent),
           m_pLibrary(pLibrary),
           m_pSourcesProperty(new QmlLibrarySourceModel(m_pLibrary->sidebarModel(), this)),
-          m_pModelProperty(new QmlLibraryTrackListModel(m_pLibrary->trackTableModel(), this)) {
+          m_pModelProperty(new QmlLibraryTrackListModel(m_pLibrary->trackTableModel(), this)),
+          m_pMediaDevicesProperty(new QmlRemovableMediaModel(m_pLibrary.get(), this)) {
     connect(m_pLibrary.get(),
             &Library::showTrackModel,
             this,
@@ -29,6 +30,23 @@ QmlLibraryProxy::QmlLibraryProxy(std::shared_ptr<Library> pLibrary, QObject* par
             &Library::rekordboxMediaStatusChanged,
             this,
             &QmlLibraryProxy::mediaStatusChanged);
+    connect(m_pLibrary.get(),
+            &Library::removableMediaDevicesChanged,
+            this,
+            &QmlLibraryProxy::mediaStatusChanged);
+    connect(m_pLibrary.get(),
+            &Library::removableMediaSafeStopFinished,
+            this,
+            [this](const mixxx::removablemedia::SafeStopResult& result) {
+                emit mediaSafeStopFinished(result.deviceId,
+                        mixxx::removablemedia::mediaStateToString(result.state),
+                        mixxx::removablemedia::errorCodeToString(result.errorCode),
+                        result.errorMessage);
+            });
+    connect(m_pLibrary.get(),
+            &Library::removableMediaActiveDeviceRemoved,
+            this,
+            &QmlLibraryProxy::mediaActiveDeviceRemoved);
     m_pLibrary->scanRekordboxDevices();
 }
 
@@ -45,7 +63,30 @@ bool QmlLibraryProxy::mediaImportInProgress() const {
 }
 
 int QmlLibraryProxy::mediaDeviceCount() const {
-    return m_pLibrary->rekordboxDeviceCount();
+    return m_pMediaDevicesProperty->rowCount();
+}
+
+QString QmlLibraryProxy::mediaScanState() const {
+    return m_pLibrary->rekordboxDeviceScanState();
+}
+
+void QmlLibraryProxy::requestMediaRescan() {
+    m_pLibrary->scanRekordboxDevices();
+}
+
+bool QmlLibraryProxy::requestSafeStop(
+        const QString& deviceId,
+        qulonglong expectedGeneration) {
+    if (deviceId.isEmpty()) {
+        return false;
+    }
+    return m_pLibrary->requestRemovableMediaSafeStop(
+            deviceId, expectedGeneration);
+}
+
+QModelIndex QmlLibraryProxy::sourceIndexForDevice(
+        const QString& deviceId) const {
+    return m_pSourcesProperty->sourceIndexForDevice(deviceId);
 }
 
 bool QmlLibraryProxy::activateSource(const QModelIndex& sourceIndex) {
@@ -94,6 +135,13 @@ bool QmlLibraryProxy::loadTrackToPlayer(
 
     const QModelIndex sourceIndex = m_pModelProperty->mapToSource(proxyIndex);
     VERIFY_OR_DEBUG_ASSERT(sourceIndex.isValid()) {
+        return false;
+    }
+
+    const QString location = pTrackModel->getTrackLocation(sourceIndex);
+    if (!m_pLibrary->isRemovableMediaLocationLoadAllowed(location)) {
+        qWarning() << "Blocked QML LOAD before reading quiescing media"
+                   << location << group;
         return false;
     }
 

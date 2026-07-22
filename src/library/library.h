@@ -7,6 +7,7 @@
 
 #include "analyzer/trackanalysisscheduler.h"
 #include "library/library_decl.h"
+#include "library/removablemedia/removablemediadevice.h"
 #ifdef __ENGINEPRIME__
 #include "library/trackset/crate/crateid.h"
 #endif
@@ -83,6 +84,14 @@ class Library: public QObject {
     int rekordboxDeviceCount() const;
     bool isRekordboxDeviceScanRunning() const;
     bool isRekordboxDatabaseImportRunning() const;
+    QString rekordboxDeviceScanState() const;
+    QList<mixxx::removablemedia::RemovableMediaDevice>
+    removableMediaDevices() const;
+    bool requestRemovableMediaSafeStop(
+            const QString& deviceId,
+            quint64 expectedGeneration);
+    bool isRemovableMediaLocationLoadAllowed(
+            const QString& location) const;
 
     bool isTrackIdInCurrentLibraryView(const TrackId& trackId);
 
@@ -158,6 +167,10 @@ class Library: public QObject {
 
     void onTrackAnalyzerProgress(TrackId trackId, AnalyzerProgress analyzerProgress);
     void rekordboxMediaStatusChanged();
+    void removableMediaDevicesChanged();
+    void removableMediaSafeStopFinished(
+            const mixxx::removablemedia::SafeStopResult& result);
+    void removableMediaActiveDeviceRemoved(const QString& deviceId);
 
   private slots:
       void onPlayerManagerTrackAnalyzerProgress(TrackId trackId, AnalyzerProgress analyzerProgress);
@@ -170,6 +183,7 @@ class Library: public QObject {
     const mixxx::DbConnectionPoolPtr m_pDbConnectionPool;
 
     const QPointer<TrackCollectionManager> m_pTrackCollectionManager;
+    const QPointer<PlayerManager> m_pPlayerManager;
 
     parented_ptr<SidebarModel> m_pSidebarModel;
     parented_ptr<LibraryControl> m_pLibraryControl;
@@ -187,5 +201,7 @@ class Library: public QObject {
     QFont m_trackTableFont;
     int m_iTrackTableRowHeight;
     bool m_editMetadataSelectedClick;
+    bool m_analysisActive{false};
+    bool m_playerAnalyzerActive{false};
     QScopedPointer<ControlObject> m_pKeyNotation;
 };

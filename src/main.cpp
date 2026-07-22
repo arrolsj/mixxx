@@ -57,6 +57,14 @@ int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
 
     const auto pCoreServices = std::make_shared<mixxx::CoreServices>(args, pApp);
 
+#if defined(__WINDOWS__)
+    // Install this for both the legacy QWidget shell and the custom QML shell.
+    // WM_DEVICECHANGE is forwarded as a hint; authoritative reconciliation is
+    // performed by the removable-media service after debounce.
+    WindowsEventHandler winEventHandler;
+    pApp->installNativeEventFilter(&winEventHandler);
+#endif
+
     int exitCode;
 #ifdef MIXXX_USE_QML
     if (args.isQml()) {
@@ -101,11 +109,6 @@ int runMixxx(MixxxApplication* pApp, const CmdlineArgs& args) {
         MixxxMainWindow mainWindow(pCoreServices);
         pApp->processEvents();
         pApp->installEventFilter(&mainWindow);
-
-#if defined(__WINDOWS__)
-        WindowsEventHandler winEventHandler;
-        pApp->installNativeEventFilter(&winEventHandler);
-#endif
 
         QObject::connect(pCoreServices.get(),
                 &mixxx::CoreServices::initializationProgressUpdate,

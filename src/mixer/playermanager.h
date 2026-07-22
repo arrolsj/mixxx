@@ -140,6 +140,10 @@ class PlayerManager : public PlayerManagerInterface {
     // must exist at least for the lifetime of this instance.
     void bindToLibrary(Library* pLibrary);
 
+    // Final, side-effect-free LOAD admission used by every BaseTrackPlayer
+    // path, including clone and the last-ejected-track cache.
+    bool isTrackLoadAllowed(const TrackPointer& pTrack) const;
+
     QStringList getVisualPlayerGroups();
 
     // Returns the group for the ith sampler where i is zero indexed

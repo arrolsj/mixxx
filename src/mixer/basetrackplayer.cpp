@@ -513,6 +513,16 @@ void BaseTrackPlayerImpl::disconnectLoadedTrack() {
 
 void BaseTrackPlayerImpl::slotLoadTrack(TrackPointer pNewTrack, bool bPlay) {
     //qDebug() << "BaseTrackPlayerImpl::slotLoadTrack" << getGroup() << pNewTrack.get();
+    if (pNewTrack && m_pPlayerManager &&
+            !m_pPlayerManager->isTrackLoadAllowed(pNewTrack)) {
+        // This is the final admission point shared by direct loads, clones,
+        // samplers, preview decks, and the last-ejected-track cache. Reject
+        // before Sandbox or EngineBuffer can touch a quiescing filesystem.
+        qWarning() << "Blocked final player LOAD from quiescing media"
+                   << pNewTrack->getLocation() << getGroup();
+        m_pChannelToCloneFrom = nullptr;
+        return;
+    }
     // Before loading the track, ensure we have access. This uses lazy
     // evaluation to make sure track isn't NULL before we dereference it.
     if (pNewTrack) {

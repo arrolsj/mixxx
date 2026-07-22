@@ -1008,6 +1008,10 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/recording/recordingfeature.cpp
   src/library/rekordbox/rekordboxbeatgrid.h
   src/library/rekordbox/rekordboxfeature.cpp
+  src/library/removablemedia/linuxudisks2removablemediaadapter.cpp
+  src/library/removablemedia/removablemediadevice.cpp
+  src/library/removablemedia/removablemediaservice.cpp
+  src/library/removablemedia/windowsremovablemediaadapter.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp
   src/library/scanner/importfilestask.cpp
   src/library/scanner/libraryscanner.cpp
@@ -2206,6 +2210,7 @@ if(BUILD_TESTING)
     src/test/rangelist_test.cpp
     src/test/readaheadmanager_test.cpp
     src/test/rekordboxbeatgrid_test.cpp
+    src/test/removablemediaservicetest.cpp
     src/test/replaygaintest.cpp
     src/test/rescalertest.cpp
     src/test/rgbcolor_test.cpp
@@ -3036,6 +3041,7 @@ if(QML)
     src/qml/qmllibraryproxy.cpp
     src/qml/qmllibrarysourcemodel.cpp
     src/qml/qmllibrarytracklistmodel.cpp
+    src/qml/qmlremovablemediamodel.cpp
     src/qml/qmlplayermanagerproxy.cpp
     src/qml/qmlplayerproxy.cpp
     src/qml/qmlvisibleeffectsmodel.cpp

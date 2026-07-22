@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QMessageBox>
+#include <algorithm>
 
 #include "control/controlobject.h"
 #include "controllers/keyboard/keyboardeventfilter.h"
@@ -31,8 +32,11 @@
 #include "library/trackset/playlistfeature.h"
 #include "library/trackset/setlogfeature.h"
 #include "library/traktor/traktorfeature.h"
+#include "mixer/basetrackplayer.h"
+#include "mixer/playerinfo.h"
 #include "mixer/playermanager.h"
 #include "moc_library.cpp"
+#include "track/track.h"
 #include "util/assert.h"
 #include "util/logger.h"
 #include "util/sandbox.h"
@@ -67,6 +71,7 @@ Library::Library(
           m_pConfig(pConfig),
           m_pDbConnectionPool(std::move(pDbConnectionPool)),
           m_pTrackCollectionManager(pTrackCollectionManager),
+          m_pPlayerManager(pPlayerManager),
           m_pSidebarModel(make_parented<SidebarModel>(this)),
           m_pLibraryControl(make_parented<LibraryControl>(this)),
           m_pLibraryWidget(nullptr),
@@ -167,6 +172,10 @@ Library::Library(
             &AnalysisFeature::trackProgress,
             this,
             &Library::onTrackAnalyzerProgress);
+    connect(m_pAnalysisFeature,
+            &AnalysisFeature::analysisActive,
+            this,
+            [this](bool active) { m_analysisActive = active; });
 
     // iTunes and Rhythmbox should be last until we no longer have an obnoxious
     // messagebox popup when you select them. (This forces you to reach for your
@@ -213,6 +222,18 @@ Library::Library(
                 &RekordboxFeature::databaseImportStateChanged,
                 this,
                 &Library::rekordboxMediaStatusChanged);
+        connect(m_pRekordboxFeature,
+                &RekordboxFeature::devicesChanged,
+                this,
+                &Library::removableMediaDevicesChanged);
+        connect(m_pRekordboxFeature,
+                &RekordboxFeature::safeStopFinished,
+                this,
+                &Library::removableMediaSafeStopFinished);
+        connect(m_pRekordboxFeature,
+                &RekordboxFeature::activeDeviceRemoved,
+                this,
+                &Library::removableMediaActiveDeviceRemoved);
         addFeature(m_pRekordboxFeature);
     }
 
@@ -534,12 +555,14 @@ void Library::addFeature(LibraryFeature* feature) {
 
 void Library::onPlayerManagerTrackAnalyzerProgress(
         TrackId /*trackId*/, AnalyzerProgress /*analyzerProgress*/) {
+    m_playerAnalyzerActive = true;
     if (m_pAnalysisFeature) {
         m_pAnalysisFeature->suspendAnalysis();
     }
 }
 
 void Library::onPlayerManagerTrackAnalyzerIdle() {
+    m_playerAnalyzerActive = false;
     if (m_pAnalysisFeature) {
         m_pAnalysisFeature->resumeAnalysis();
     }
@@ -547,6 +570,10 @@ void Library::onPlayerManagerTrackAnalyzerIdle() {
 
 void Library::slotShowTrackModel(QAbstractItemModel* model) {
     // qDebug() << "Library::slotShowTrackModel" << model;
+    if (!model) {
+        emit showTrackModel(nullptr);
+        return;
+    }
     TrackModel* trackModel = dynamic_cast<TrackModel*>(model);
     VERIFY_OR_DEBUG_ASSERT(trackModel) {
         return;
@@ -562,10 +589,23 @@ void Library::slotSwitchToView(const QString& view) {
 }
 
 void Library::slotLoadTrack(TrackPointer pTrack) {
+    if (pTrack && m_pRekordboxFeature &&
+            !m_pRekordboxFeature->isLocationLoadAllowed(
+                    pTrack->getLocation())) {
+        qWarning() << "Blocked LOAD from quiescing removable media"
+                   << pTrack->getLocation();
+        return;
+    }
     emit loadTrack(pTrack);
 }
 
 void Library::slotLoadLocationToPlayer(const QString& location, const QString& group, bool play) {
+    if (m_pRekordboxFeature &&
+            !m_pRekordboxFeature->isLocationLoadAllowed(location)) {
+        qWarning() << "Blocked LOAD from quiescing removable media"
+                   << location << group;
+        return;
+    }
     auto trackRef = TrackRef::fromFilePath(location);
     TrackPointer pTrack = m_pTrackCollectionManager->getOrAddTrack(trackRef);
     if (pTrack) {
@@ -575,6 +615,13 @@ void Library::slotLoadLocationToPlayer(const QString& location, const QString& g
 
 void Library::slotLoadTrackToPlayer(
         TrackPointer pTrack, const QString& group, bool play) {
+    if (pTrack && m_pRekordboxFeature &&
+            !m_pRekordboxFeature->isLocationLoadAllowed(
+                    pTrack->getLocation())) {
+        qWarning() << "Blocked LOAD from quiescing removable media"
+                   << pTrack->getLocation() << group;
+        return;
+    }
     emit loadTrackToPlayer(pTrack, group, play);
 }
 
@@ -798,4 +845,95 @@ bool Library::isRekordboxDeviceScanRunning() const {
 
 bool Library::isRekordboxDatabaseImportRunning() const {
     return m_pRekordboxFeature && m_pRekordboxFeature->isDatabaseImportRunning();
+}
+
+QString Library::rekordboxDeviceScanState() const {
+    return m_pRekordboxFeature
+            ? m_pRekordboxFeature->deviceScanState()
+            : QStringLiteral("idle");
+}
+
+QList<mixxx::removablemedia::RemovableMediaDevice>
+Library::removableMediaDevices() const {
+    return m_pRekordboxFeature
+            ? m_pRekordboxFeature->mediaDevices()
+            : QList<mixxx::removablemedia::RemovableMediaDevice>{};
+}
+
+bool Library::isRemovableMediaLocationLoadAllowed(
+        const QString& location) const {
+    return !m_pRekordboxFeature ||
+            m_pRekordboxFeature->isLocationLoadAllowed(location);
+}
+
+bool Library::requestRemovableMediaSafeStop(
+        const QString& deviceId,
+        quint64 expectedGeneration) {
+    if (!m_pRekordboxFeature) {
+        return false;
+    }
+    if (m_pRekordboxFeature->isSafeStopActiveFor(deviceId)) {
+        // Join an already accepted same-device request before any new busy
+        // preflight can emit a false terminal result for the active dialog.
+        return true;
+    }
+
+    QStringList loadedGroups;
+    const auto mediaDevices = m_pRekordboxFeature->mediaDevices();
+    const auto selectedDeviceIt = std::find_if(mediaDevices.cbegin(),
+            mediaDevices.cend(),
+            [&deviceId](const auto& device) {
+                return device.deviceId == deviceId;
+            });
+    const QString selectedRemovalGroupId = selectedDeviceIt == mediaDevices.cend()
+            ? QString()
+            : selectedDeviceIt->removalGroupId;
+    auto loadedTracks = PlayerInfo::instance().getLoadedTracks();
+    if (m_pPlayerManager) {
+        // PlayerInfo is updated after EngineBuffer finishes a LOAD. Consult
+        // each player's current TrackPointer as well so an in-flight LOAD is
+        // already a busy reference before STOP can enter quiescing.
+        const QStringList playerGroups =
+                m_pPlayerManager->getVisualPlayerGroups();
+        for (const QString& group : playerGroups) {
+            BaseTrackPlayer* pPlayer = m_pPlayerManager->getPlayer(group);
+            if (pPlayer && pPlayer->getLoadedTrack()) {
+                loadedTracks.insert(group, pPlayer->getLoadedTrack());
+            }
+        }
+    }
+    for (auto it = loadedTracks.cbegin(); it != loadedTracks.cend(); ++it) {
+        const TrackPointer& pTrack = it.value();
+        if (!pTrack) {
+            continue;
+        }
+        const QString loadedDeviceId =
+                m_pRekordboxFeature->deviceIdForLocation(
+                        pTrack->getLocation());
+        const auto loadedDeviceIt = std::find_if(mediaDevices.cbegin(),
+                mediaDevices.cend(),
+                [&loadedDeviceId](const auto& device) {
+                    return device.deviceId == loadedDeviceId;
+                });
+        if (loadedDeviceId == deviceId ||
+                (!selectedRemovalGroupId.isEmpty() &&
+                        loadedDeviceIt != mediaDevices.cend() &&
+                        loadedDeviceIt->removalGroupId ==
+                                selectedRemovalGroupId)) {
+            loadedGroups.append(it.key());
+        }
+    }
+    if (!loadedGroups.isEmpty()) {
+        m_pRekordboxFeature->rejectSafeStop(deviceId,
+                tr("Tracks from this device are still loaded in: %1")
+                        .arg(loadedGroups.join(QStringLiteral(", "))));
+        return false;
+    }
+    if (m_analysisActive || m_playerAnalyzerActive) {
+        m_pRekordboxFeature->rejectSafeStop(deviceId,
+                tr("Track analysis is active; the device cannot be released safely."));
+        return false;
+    }
+    return m_pRekordboxFeature->requestSafeStop(
+            deviceId, expectedGeneration);
 }

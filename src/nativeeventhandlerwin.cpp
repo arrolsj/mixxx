@@ -8,6 +8,8 @@
 #include <winuser.h>  // for MSG, RedrawWindow PostMessageW
 // clang-format on
 
+#include "library/removablemedia/removablemediaservice.h"
+
 bool WindowsEventHandler::nativeEventFilter(
         const QByteArray& eventType,
         void* message,
@@ -19,6 +21,9 @@ bool WindowsEventHandler::nativeEventFilter(
     Q_UNUSED(eventType);
     Q_UNUSED(result);
     MSG* msg = reinterpret_cast<MSG*>(message);
+    if (msg && msg->message == WM_DEVICECHANGE) {
+        mixxx::removablemedia::notifyNativeTopologyChange();
+    }
     if (msg && msg->message == WM_NCLBUTTONDOWN) {
         // Trigger the modal loop to prevent 500ms wait in Event Loop
         // when Windows setting "Show window contents while dragging" is enabled

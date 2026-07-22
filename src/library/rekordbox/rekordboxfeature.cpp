@@ -1,7 +1,3 @@
-#if defined(__WINDOWS__)
-#include <windows.h>
-#endif
-
 #include "library/rekordbox/rekordboxfeature.h"
 
 #include <mp3guessenc.h>
@@ -10,15 +6,18 @@
 
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QMap>
 #include <QMessageBox>
-#include <QSettings>
 #include <QSet>
+#include <QSettings>
 #include <QString>
 #include <QTextCodec>
 #include <QtDebug>
 #include <QtEndian>
+#include <algorithm>
+#include <utility>
 
 #include "engine/engine.h"
 #include "library/dao/trackschema.h"
@@ -58,6 +57,33 @@ constexpr quint32 kPdbHeaderSize = 28;
 constexpr quint32 kPdbTablePointerSize = 16;
 constexpr quint32 kMinimumPdbPageSize = 40;
 constexpr quint32 kDeviceNameOffsetInHistoryRow = 30;
+constexpr int kMaximumPlaylistDepth = 256;
+
+QString treeItemDevicePath(const TreeItem* pItem) {
+    const QVariantList data = pItem ? pItem->getData().toList() : QVariantList{};
+    return data.isEmpty() ? QString() : data.constFirst().toString();
+}
+
+QString treeItemDeviceId(const TreeItem* pItem) {
+    const QVariantList data = pItem ? pItem->getData().toList() : QVariantList{};
+    return data.size() > 2 ? data.at(2).toString() : QString();
+}
+
+bool pathIsWithinMount(const QString& path, const QString& mountPoint) {
+    if (path.isEmpty() || mountPoint.isEmpty()) {
+        return false;
+    }
+    QString normalizedPath = QDir::cleanPath(path);
+    QString normalizedMount = QDir::cleanPath(mountPoint);
+    if (!normalizedMount.endsWith(QLatin1Char('/'))) {
+        normalizedMount.append(QLatin1Char('/'));
+    }
+#if defined(__WINDOWS__)
+    return normalizedPath.startsWith(normalizedMount, Qt::CaseInsensitive);
+#else
+    return normalizedPath.startsWith(normalizedMount, Qt::CaseSensitive);
+#endif
+}
 
 QString getText(rekordbox_pdb_t::device_sql_string_t* deviceString);
 
@@ -133,29 +159,6 @@ QString rekordboxDeviceNameFromDatabase(const QFileInfo& databaseFileInfo) {
 
     return {};
 }
-#if defined(__WINDOWS__)
-QString windowsVolumeLabel(const QString& path) {
-    QString rootPath = QDir::toNativeSeparators(path);
-    if (!rootPath.endsWith(QLatin1Char('\\'))) {
-        rootPath.append(QLatin1Char('\\'));
-    }
-
-    wchar_t volumeName[MAX_PATH + 1] = {};
-    if (!GetVolumeInformationW(
-                reinterpret_cast<LPCWSTR>(rootPath.utf16()),
-                volumeName,
-                MAX_PATH + 1,
-                nullptr,
-                nullptr,
-                nullptr,
-                nullptr,
-                0)) {
-        return {};
-    }
-    return QString::fromWCharArray(volumeName).trimmed();
-}
-#endif
-
 quint32 readLittleEndianU32(const QByteArray& bytes, qsizetype offset) {
     return qFromLittleEndian<quint32>(
             reinterpret_cast<const uchar*>(bytes.constData() + offset));
@@ -337,8 +340,9 @@ bool createPlaylistsTable(QSqlDatabase& database, const QString& tableName) {
     query.prepare(
             "CREATE TABLE IF NOT EXISTS " + tableName +
             " ("
-            "    id INTEGER PRIMARY KEY,"
-            "    name TEXT UNIQUE"
+            "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "    name TEXT UNIQUE,"
+            "    device TEXT NOT NULL"
             ");");
 
     if (!query.exec()) {
@@ -384,105 +388,77 @@ bool dropTable(QSqlDatabase& database, const QString& tableName) {
     return true;
 }
 
-// This function is executed in a separate thread other than the main thread
-// The returned list owns the pointers, but we can't use a unique_ptr because
-// the result is passed by a const reference inside QFuture and than copied
-// to the main thread requiring a copy-able object.
-QList<TreeItem*> findRekordboxDevices() {
+// This function is executed outside the main thread. The snapshot generation
+// fences its result so a late scan can never resurrect a removed device.
+RekordboxDeviceScanResult findRekordboxDevices(
+        QList<mixxx::removablemedia::RemovableMediaDevice> mediaDevices,
+        quint64 generation,
+        QSet<QString> loadBlockedDeviceIds) {
     QThread* thisThread = QThread::currentThread();
     thisThread->setPriority(QThread::LowPriority);
 
-    QList<TreeItem*> foundDevices;
+    RekordboxDeviceScanResult result;
+    result.generation = generation;
 
-#if defined(__WINDOWS__)
-    // Repopulate drive list
-    QFileInfoList drives = QDir::drives();
-    // show drive letters
-    foreach (QFileInfo drive, drives) {
-        // Using drive.filePath() instead of drive.canonicalPath() as it
-        // freezes interface too much if there is a network share mounted
-        // (drive letter assigned) but unavailable
-        //
-        // drive.canonicalPath() make a system call to the underlying filesystem
-        // introducing delay if it is unreadable.
-        // drive.filePath() doesn't make any access to the filesystem and consequently
-        // shorten the delay
-
-        QFileInfo rbDBFileInfo(drive.filePath() + kPdbPath);
-
-        if (rbDBFileInfo.exists() && rbDBFileInfo.isFile() &&
-                hasValidRekordboxDatabaseHeader(rbDBFileInfo)) {
-            QString displayPath = drive.filePath();
-            if (displayPath.endsWith("/")) {
-                displayPath.chop(1);
-            }
-            QString deviceName =
-                    rekordboxDeviceNameFromDatabase(rbDBFileInfo);
-            if (deviceName.isEmpty()) {
-                deviceName = windowsVolumeLabel(drive.filePath());
-            }
-            if (!deviceName.isEmpty()) {
-                displayPath = QStringLiteral("%1 · %2")
-                                      .arg(displayPath, deviceName);
-            }
-            QList<QString> data;
-            data << drive.filePath();
-            data << IS_RECORDBOX_DEVICE;
-            auto* pFoundDevice = new TreeItem(
-                    std::move(displayPath),
-                    QVariant(data));
-            foundDevices << pFoundDevice;
+    for (auto& mediaDevice : mediaDevices) {
+        mediaDevice.generation = generation;
+        if (loadBlockedDeviceIds.contains(mediaDevice.deviceId)) {
+            // Once STOP is accepted, discovery must not reopen export.pdb or
+            // any other path in the physical removal group.
+            mediaDevice.state =
+                    mixxx::removablemedia::MediaState::Quiescing;
+            result.mediaDevices.append(std::move(mediaDevice));
+            continue;
         }
-    }
-#elif defined(__LINUX__)
-    // To get devices on Linux, we look for directories under /media and
-    // /run/media/$USER.
-    QFileInfoList devices;
+        mediaDevice.state = mixxx::removablemedia::MediaState::Scanning;
+        bool databaseFileSeen = false;
+        bool validDatabaseFound = false;
 
-    // Add folders under /media to devices.
-    devices += QDir(QStringLiteral("/media")).entryInfoList(QDir::AllDirs | QDir::NoDotAndDotDot);
+        for (const QString& mountPoint : std::as_const(mediaDevice.mountPoints)) {
+            const QString devicePath = QDir::cleanPath(mountPoint);
+            const QFileInfo databaseFileInfo(
+                    QDir(devicePath).filePath(kPdbPath));
+            if (!databaseFileInfo.exists() || !databaseFileInfo.isFile()) {
+                continue;
+            }
+            databaseFileSeen = true;
+            if (!hasValidRekordboxDatabaseHeader(databaseFileInfo)) {
+                continue;
+            }
 
-    // Add folders under /media/$USER to devices.
-    QDir mediaUserDir(QStringLiteral("/media/") + QString::fromLocal8Bit(qgetenv("USER")));
-    devices += mediaUserDir.entryInfoList(
-            QDir::AllDirs | QDir::NoDotAndDotDot);
+            validDatabaseFound = true;
+            QString displayName = rekordboxDeviceNameFromDatabase(
+                    databaseFileInfo)
+                                          .trimmed();
+            if (displayName.isEmpty()) {
+                displayName = mediaDevice.displayName;
+            }
+            mediaDevice.displayName = displayName;
+            mediaDevice.state = mixxx::removablemedia::MediaState::Ready;
+            mediaDevice.errorCode = mixxx::removablemedia::ErrorCode::None;
+            mediaDevice.errorMessage.clear();
 
-    // Add folders under /run/media/$USER to devices.
-    QDir runMediaUserDir(QStringLiteral("/run/media/") + QString::fromLocal8Bit(qgetenv("USER")));
-    devices += runMediaUserDir.entryInfoList(
-            QDir::AllDirs | QDir::NoDotAndDotDot);
-
-    foreach (QFileInfo device, devices) {
-        QFileInfo rbDBFileInfo(device.filePath() + QStringLiteral("/") + kPdbPath);
-
-        if (rbDBFileInfo.exists() && rbDBFileInfo.isFile() &&
-                hasValidRekordboxDatabaseHeader(rbDBFileInfo)) {
-            auto* pFoundDevice = new TreeItem(
-                    device.fileName(),
-                    QVariant(QList<QString>{device.filePath(), IS_RECORDBOX_DEVICE}));
-            foundDevices << pFoundDevice;
+            const QVariantList data{
+                    devicePath,
+                    QStringLiteral(IS_RECORDBOX_DEVICE),
+                    mediaDevice.deviceId,
+                    QVariant::fromValue<qulonglong>(generation)};
+            result.treeItems.append(new TreeItem(displayName, data));
+            break;
         }
-    }
-#else // __APPLE__
-    QFileInfoList devices = QDir(QStringLiteral("/Volumes")).entryInfoList(QDir::AllDirs | QDir::NoDotAndDotDot);
 
-    foreach (QFileInfo device, devices) {
-        QFileInfo rbDBFileInfo(device.filePath() + QStringLiteral("/") + kPdbPath);
-
-        if (rbDBFileInfo.exists() && rbDBFileInfo.isFile() &&
-                hasValidRekordboxDatabaseHeader(rbDBFileInfo)) {
-            QList<QString> data;
-            data << device.filePath();
-            data << IS_RECORDBOX_DEVICE;
-            auto* pFoundDevice = new TreeItem(
-                    device.fileName(),
-                    QVariant(data));
-            foundDevices << pFoundDevice;
+        if (!validDatabaseFound) {
+            mediaDevice.state = mixxx::removablemedia::MediaState::Failed;
+            mediaDevice.errorCode =
+                    mixxx::removablemedia::ErrorCode::InvalidDatabase;
+            mediaDevice.errorMessage = databaseFileSeen
+                    ? QObject::tr("The Rekordbox database is invalid or damaged.")
+                    : QObject::tr("No Rekordbox export database was found.");
         }
+        result.mediaDevices.append(std::move(mediaDevice));
     }
-#endif
 
-    return foundDevices;
+    return result;
 }
 
 template<typename Base, typename T>
@@ -528,16 +504,20 @@ QString getText(rekordbox_pdb_t::device_sql_string_t* deviceString) {
     return text.remove(QChar('\x0'));
 }
 
-int createDevicePlaylist(QSqlDatabase& database, const QString& devicePath) {
+int createDevicePlaylist(
+        QSqlDatabase& database,
+        const QString& devicePath,
+        const QString& deviceId) {
     int playlistID = kInvalidPlaylistId;
 
     QSqlQuery queryInsertIntoDevicePlaylist(database);
     queryInsertIntoDevicePlaylist.prepare(
             "INSERT INTO " + kRekordboxPlaylistsTable +
-            " (name) "
-            "VALUES (:name)");
+            " (name, device) "
+            "VALUES (:name, :device)");
 
     queryInsertIntoDevicePlaylist.bindValue(":name", devicePath);
+    queryInsertIntoDevicePlaylist.bindValue(":device", deviceId);
 
     if (!queryInsertIntoDevicePlaylist.exec()) {
         LOG_FAILED_QUERY(queryInsertIntoDevicePlaylist)
@@ -594,7 +574,7 @@ void insertTrack(
         QMap<uint32_t, QString>& genresMap,
         QMap<uint32_t, QString>& keysMap,
         const QString& devicePath,
-        const QString& device,
+        const QString& deviceId,
         QHash<uint32_t, int>& trackIdsByRekordboxId,
         int audioFilesCount) {
     int rbID = static_cast<int>(track->id());
@@ -628,7 +608,7 @@ void insertTrack(
     query.bindValue(":bpm", bpm);
     query.bindValue(":bitrate", bitrate);
     query.bindValue(":analyze_path", anlzPath);
-    query.bindValue(":device", device);
+    query.bindValue(":device", deviceId);
     query.bindValue(":color",
             mixxx::RgbColor::toQVariant(
                     colorFromID(static_cast<int>(track->color_id()))));
@@ -657,7 +637,7 @@ void insertTrack(
     }
 }
 
-void buildPlaylistTree(
+bool buildPlaylistTree(
         QSqlDatabase& database,
         QList<RekordboxPlaylistTreeEntry>& playlistTreeEntries,
         int parentEntryIndex,
@@ -666,15 +646,23 @@ void buildPlaylistTree(
         QMap<uint32_t, bool>& playlistIsFolderMap,
         QMap<uint32_t, QMap<uint32_t, uint32_t>>& playlistTreeMap,
         QMap<uint32_t, QMap<uint32_t, uint32_t>>& playlistTrackMap,
+        const QString& deviceId,
         const QString& playlistPath,
-        const QHash<uint32_t, int>& trackIdsByRekordboxId);
+        const QHash<uint32_t, int>& trackIdsByRekordboxId,
+        QSet<uint32_t>& visitedPlaylistIds,
+        int depth);
 
 RekordboxImportResult parseDeviceDB(
         mixxx::DbConnectionPoolPtr dbConnectionPool,
         QString device,
-        QString devicePath) {
+        QString devicePath,
+        QString deviceId,
+        quint64 generation) {
     RekordboxImportResult importResult;
     importResult.devicePath = devicePath;
+    importResult.deviceLabel = device;
+    importResult.deviceId = deviceId;
+    importResult.generation = generation;
 
     qDebug() << "parseDeviceDB device: " << device << " devicePath: " << devicePath;
     QElapsedTimer parseTimer;
@@ -695,7 +683,7 @@ RekordboxImportResult parseDeviceDB(
     VERIFY_OR_DEBUG_ASSERT(database.isOpen()) {
         qDebug() << "Failed to open database for Rekordbox parser."
                  << database.lastError();
-        return {};
+        return importResult;
     }
 
     //Give thread a low priority
@@ -716,7 +704,11 @@ RekordboxImportResult parseDeviceDB(
     int audioFilesCount = 0;
 
     // Create a playlist for all the tracks on a device
-    int playlistID = createDevicePlaylist(database, devicePath);
+    int playlistID = createDevicePlaylist(
+            database, devicePath, deviceId);
+    if (playlistID == kInvalidPlaylistId) {
+        return importResult;
+    }
 
     QSqlQuery queryInsertIntoDevicePlaylistTracks(database);
     queryInsertIntoDevicePlaylistTracks.prepare(
@@ -728,7 +720,7 @@ RekordboxImportResult parseDeviceDB(
 
     mixxx::FileInfo fileInfo(dbPath);
     if (!Sandbox::askForAccess(&fileInfo)) {
-        return {};
+        return importResult;
     }
     std::ifstream ifs(dbPath.toStdString(), std::ifstream::binary);
     kaitai::kstream ks(&ifs);
@@ -765,14 +757,32 @@ RekordboxImportResult parseDeviceDB(
     QHash<uint32_t, int> trackIdsByRekordboxId;
 
     bool folderOrPlaylistFound = false;
+    const quint64 pdbPageSize = rekordboxDB.len_page();
+    const quint64 maximumPageCount = pdbPageSize == 0
+            ? 0
+            : static_cast<quint64>(QFileInfo(dbPath).size()) /
+                    pdbPageSize;
+    if (maximumPageCount == 0) {
+        return importResult;
+    }
 
     for (int tableOrderIndex = 0; tableOrderIndex < totalTables; tableOrderIndex++) {
         for (const auto& table : *rekordboxDB.tables()) {
             if (table->type() == tableOrder[tableOrderIndex]) {
                 uint16_t lastIndex = table->last_page()->index();
                 rekordbox_pdb_t::page_ref_t* currentRef = table->first_page();
+                QSet<quint32> visitedPageIndexes;
 
-                while (true) {
+                while (currentRef) {
+                    const quint32 currentPageIndex = currentRef->index();
+                    if (currentPageIndex >= maximumPageCount ||
+                            visitedPageIndexes.contains(currentPageIndex)) {
+                        qWarning() << "Rejecting cyclic or out-of-range Rekordbox page chain"
+                                   << currentPageIndex << "of"
+                                   << maximumPageCount;
+                        return importResult;
+                    }
+                    visitedPageIndexes.insert(currentPageIndex);
                     rekordbox_pdb_t::page_t* page = currentRef->body();
 
                     if (page->is_data_page()) {
@@ -825,7 +835,7 @@ RekordboxImportResult parseDeviceDB(
                                                 genresMap,
                                                 keysMap,
                                                 devicePath,
-                                                device,
+                                                deviceId,
                                                 trackIdsByRekordboxId,
                                                 audioFilesCount);
 
@@ -864,6 +874,10 @@ RekordboxImportResult parseDeviceDB(
                         currentRef = page->next_page();
                     }
                 }
+                if (!currentRef) {
+                    qWarning() << "Rejecting unterminated Rekordbox page chain";
+                    return importResult;
+                }
             }
         }
     }
@@ -871,16 +885,22 @@ RekordboxImportResult parseDeviceDB(
     if (audioFilesCount > 0 || folderOrPlaylistFound) {
         // If we have found anything, recursively build playlist/folder TreeItem children
         // for the original device TreeItem
-        buildPlaylistTree(database,
-                importResult.playlistTree,
-                -1,
-                0,
-                playlistNameMap,
-                playlistIsFolderMap,
-                playlistTreeMap,
-                playlistTrackMap,
-                devicePath,
-                trackIdsByRekordboxId);
+        QSet<uint32_t> visitedPlaylistIds;
+        if (!buildPlaylistTree(database,
+                    importResult.playlistTree,
+                    -1,
+                    0,
+                    playlistNameMap,
+                    playlistIsFolderMap,
+                    playlistTreeMap,
+                    playlistTrackMap,
+                    deviceId,
+                    devicePath,
+                    trackIdsByRekordboxId,
+                    visitedPlaylistIds,
+                    0)) {
+            return importResult;
+        }
     }
 
     qDebug() << "Found:" << audioFilesCount
@@ -888,11 +908,12 @@ RekordboxImportResult parseDeviceDB(
              << "elapsed_ms:" << parseTimer.elapsed();
 
     transaction.commit();
+    importResult.succeeded = true;
 
     return importResult;
 }
 
-void buildPlaylistTree(
+bool buildPlaylistTree(
         QSqlDatabase& database,
         QList<RekordboxPlaylistTreeEntry>& playlistTreeEntries,
         int parentEntryIndex,
@@ -901,8 +922,15 @@ void buildPlaylistTree(
         QMap<uint32_t, bool>& playlistIsFolderMap,
         QMap<uint32_t, QMap<uint32_t, uint32_t>>& playlistTreeMap,
         QMap<uint32_t, QMap<uint32_t, uint32_t>>& playlistTrackMap,
+        const QString& deviceId,
         const QString& playlistPath,
-        const QHash<uint32_t, int>& trackIdsByRekordboxId) {
+        const QHash<uint32_t, int>& trackIdsByRekordboxId,
+        QSet<uint32_t>& visitedPlaylistIds,
+        int depth) {
+    if (depth > kMaximumPlaylistDepth) {
+        qWarning() << "Rejecting over-deep Rekordbox playlist tree";
+        return false;
+    }
     for (uint32_t childIndex = 0;
             childIndex < (uint32_t)playlistTreeMap[parentID].size();
             childIndex++) {
@@ -910,6 +938,12 @@ void buildPlaylistTree(
         if (childID == 0) {
             continue;
         }
+        if (visitedPlaylistIds.contains(childID)) {
+            qWarning() << "Rejecting cyclic or duplicate Rekordbox playlist node"
+                       << childID;
+            return false;
+        }
+        visitedPlaylistIds.insert(childID);
         QString playlistItemName = playlistNameMap[childID];
 
         QString currentPath = playlistPath + kPLaylistPathDelimiter + playlistItemName;
@@ -922,15 +956,16 @@ void buildPlaylistTree(
         QSqlQuery queryInsertIntoPlaylist(database);
         queryInsertIntoPlaylist.prepare(
                 "INSERT INTO " + kRekordboxPlaylistsTable +
-                " (name) "
-                "VALUES (:name)");
+                " (name, device) "
+                "VALUES (:name, :device)");
 
         queryInsertIntoPlaylist.bindValue(":name", currentPath);
+        queryInsertIntoPlaylist.bindValue(":device", deviceId);
 
         if (!queryInsertIntoPlaylist.exec()) {
             LOG_FAILED_QUERY(queryInsertIntoPlaylist)
                     << "currentPath" << currentPath;
-            return;
+            return false;
         }
 
         bool idIsValid = false;
@@ -938,7 +973,7 @@ void buildPlaylistTree(
         if (!idIsValid || playlistID <= 0) {
             qWarning() << "Failed to read inserted Rekordbox playlist ID"
                        << currentPath;
-            return;
+            return false;
         }
 
         QSqlQuery queryInsertIntoPlaylistTracks(database);
@@ -972,90 +1007,73 @@ void buildPlaylistTree(
                             << "trackID:" << trackID
                             << "trackIndex:" << trackIndex;
 
-                    return;
+                    return false;
                 }
             }
         }
 
         if (playlistIsFolderMap[childID]) {
             // If this child is a folder (playlists are only leaf nodes), build playlist tree for it
-            buildPlaylistTree(database,
-                    playlistTreeEntries,
-                    childEntryIndex,
-                    childID,
-                    playlistNameMap,
-                    playlistIsFolderMap,
-                    playlistTreeMap,
-                    playlistTrackMap,
-                    currentPath,
-                    trackIdsByRekordboxId);
+            if (!buildPlaylistTree(database,
+                        playlistTreeEntries,
+                        childEntryIndex,
+                        childID,
+                        playlistNameMap,
+                        playlistIsFolderMap,
+                        playlistTreeMap,
+                        playlistTrackMap,
+                        deviceId,
+                        currentPath,
+                        trackIdsByRekordboxId,
+                        visitedPlaylistIds,
+                        depth + 1)) {
+                return false;
+            }
         }
     }
+    return true;
 }
 
 void clearDeviceTables(QSqlDatabase& database, TreeItem* child) {
     ScopedTransaction transaction(database);
 
-    int trackID = -1;
-    int playlistID = kInvalidPlaylistId;
-    QSqlQuery tracksQuery(database);
-    tracksQuery.prepare("select id from " + kRekordboxLibraryTable + " where device=:device");
-    tracksQuery.bindValue(":device", child->getLabel());
-
-    QSqlQuery deletePlaylistsQuery(database);
-    deletePlaylistsQuery.prepare("delete from " + kRekordboxPlaylistsTable + " where id=:id");
-
-    QSqlQuery deletePlaylistTracksQuery(database);
-    deletePlaylistTracksQuery.prepare("delete from " +
-            kRekordboxPlaylistTracksTable + " where playlist_id=:playlist_id");
-
-    if (!tracksQuery.exec()) {
-        LOG_FAILED_QUERY(tracksQuery)
-                << "device:" << child->getLabel();
+    const QString deviceId = treeItemDeviceId(child);
+    if (deviceId.isEmpty()) {
+        qWarning() << "Refusing to clear Rekordbox tables without a device identity";
+        return;
     }
 
-    while (tracksQuery.next()) {
-        trackID = tracksQuery.value(tracksQuery.record().indexOf("id")).toInt();
+    QSqlQuery deletePlaylistTracksQuery(database);
+    deletePlaylistTracksQuery.prepare(
+            "delete from " + kRekordboxPlaylistTracksTable +
+            " where playlist_id in (select id from " +
+            kRekordboxPlaylistsTable + " where device=:device)");
+    deletePlaylistTracksQuery.bindValue(":device", deviceId);
+    if (!deletePlaylistTracksQuery.exec()) {
+        LOG_FAILED_QUERY(deletePlaylistTracksQuery)
+                << "deviceId:" << deviceId;
+        return;
+    }
 
-        QSqlQuery playlistTracksQuery(database);
-        playlistTracksQuery.prepare("select playlist_id from " +
-                kRekordboxPlaylistTracksTable + " where track_id=:track_id");
-        playlistTracksQuery.bindValue(":track_id", trackID);
-
-        if (!playlistTracksQuery.exec()) {
-            LOG_FAILED_QUERY(playlistTracksQuery)
-                    << "trackID:" << trackID;
-        }
-
-        while (playlistTracksQuery.next()) {
-            playlistID = playlistTracksQuery
-                                 .value(playlistTracksQuery.record().indexOf(
-                                         "playlist_id"))
-                                 .toInt();
-
-            deletePlaylistsQuery.bindValue(":id", playlistID);
-
-            if (!deletePlaylistsQuery.exec()) {
-                LOG_FAILED_QUERY(deletePlaylistsQuery)
-                        << "playlistID:" << playlistID;
-            }
-
-            deletePlaylistTracksQuery.bindValue(":playlist_id", playlistID);
-
-            if (!deletePlaylistTracksQuery.exec()) {
-                LOG_FAILED_QUERY(deletePlaylistTracksQuery)
-                        << "playlistID:" << playlistID;
-            }
-        }
+    QSqlQuery deletePlaylistsQuery(database);
+    deletePlaylistsQuery.prepare(
+            "delete from " + kRekordboxPlaylistsTable +
+            " where device=:device");
+    deletePlaylistsQuery.bindValue(":device", deviceId);
+    if (!deletePlaylistsQuery.exec()) {
+        LOG_FAILED_QUERY(deletePlaylistsQuery)
+                << "deviceId:" << deviceId;
+        return;
     }
 
     QSqlQuery deleteTracksQuery(database);
     deleteTracksQuery.prepare("delete from " + kRekordboxLibraryTable + " where device=:device");
-    deleteTracksQuery.bindValue(":device", child->getLabel());
+    deleteTracksQuery.bindValue(":device", deviceId);
 
     if (!deleteTracksQuery.exec()) {
         LOG_FAILED_QUERY(deleteTracksQuery)
-                << "device:" << child->getLabel();
+                << "deviceId:" << deviceId;
+        return;
     }
 
     transaction.commit();
@@ -1563,9 +1581,16 @@ bool RekordboxPlaylistModel::isColumnInternal(int column) {
 
 RekordboxFeature::RekordboxFeature(
         Library* pLibrary,
-        UserSettingsPointer pConfig)
+        UserSettingsPointer pConfig,
+        std::unique_ptr<mixxx::removablemedia::IRemovableMediaService>
+                pRemovableMediaService)
         : BaseExternalLibraryFeature(pLibrary, pConfig, QStringLiteral("rekordbox")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)) {
+    if (!pRemovableMediaService) {
+        pRemovableMediaService =
+                mixxx::removablemedia::createRemovableMediaService();
+    }
+    m_pRemovableMediaService = std::move(pRemovableMediaService);
     QString tableName = kRekordboxLibraryTable;
     QString idColumn = LIBRARYTABLE_ID;
     QStringList columns = {
@@ -1621,7 +1646,7 @@ RekordboxFeature::RekordboxFeature(
     transaction.commit();
 
     connect(&m_devicesFutureWatcher,
-            &QFutureWatcher<QList<TreeItem*>>::finished,
+            &QFutureWatcher<RekordboxDeviceScanResult>::finished,
             this,
             &RekordboxFeature::onRekordboxDevicesFound);
     connect(&m_tracksFutureWatcher,
@@ -1632,8 +1657,17 @@ RekordboxFeature::RekordboxFeature(
             &QFutureWatcher<RekordboxImportResult>::finished,
             this,
             &RekordboxFeature::databaseImportStateChanged);
+    connect(m_pRemovableMediaService.get(),
+            &mixxx::removablemedia::IRemovableMediaService::devicesChanged,
+            this,
+            &RekordboxFeature::onRemovableMediaDevicesChanged);
+    connect(m_pRemovableMediaService.get(),
+            &mixxx::removablemedia::IRemovableMediaService::safeStopFinished,
+            this,
+            &RekordboxFeature::onSafeStopFinished);
     // initialize the model
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
+    m_pRemovableMediaService->requestRescan();
 }
 
 RekordboxFeature::~RekordboxFeature() {
@@ -1700,20 +1734,308 @@ int RekordboxFeature::deviceCount() const {
 }
 
 bool RekordboxFeature::isDeviceScanRunning() const {
-    return m_devicesFutureWatcher.isRunning();
+    return m_devicesFutureWatcher.isRunning() ||
+            m_deviceScanApplyPending;
 }
 
 bool RekordboxFeature::isDatabaseImportRunning() const {
-    return m_tracksFutureWatcher.isRunning();
+    return m_tracksFutureWatcher.isRunning() ||
+            m_databaseImportApplyPending;
+}
+
+QString RekordboxFeature::deviceScanState() const {
+    if (!isDeviceScanRunning()) {
+        return QStringLiteral("idle");
+    }
+    return m_deviceScanPending
+            ? QStringLiteral("pending")
+            : QStringLiteral("scanning");
+}
+
+QList<mixxx::removablemedia::RemovableMediaDevice>
+RekordboxFeature::mediaDevices() const {
+    return m_mediaDevices;
 }
 
 void RekordboxFeature::scanDevices() {
-    if (m_devicesFutureWatcher.isRunning()) {
+    m_pRemovableMediaService->requestRescan();
+    startDeviceScan();
+}
+
+void RekordboxFeature::startDeviceScan(bool replaceCompletedScan) {
+    if (replaceCompletedScan) {
+        VERIFY_OR_DEBUG_ASSERT(m_deviceScanApplyPending &&
+                !m_devicesFutureWatcher.isRunning()) {
+            return;
+        }
+    } else if (isDeviceScanRunning()) {
+        m_deviceScanPending = true;
+        emit deviceScanStateChanged();
         return;
     }
-    m_devicesFuture = QtConcurrent::run(findRekordboxDevices);
+    // Own the result before publishing a scanning snapshot. Synchronous
+    // observers of devicesChanged() must never see an idle admission fence
+    // while this scan is already being prepared.
+    m_deviceScanApplyPending = true;
+    m_deviceScanPending = false;
+    m_activeScanGeneration = m_pRemovableMediaService->generation();
+    QList<mixxx::removablemedia::RemovableMediaDevice> snapshot =
+            m_pRemovableMediaService->devices();
+    for (auto& device : snapshot) {
+        if (!m_safeStopRemovalGroupId.isEmpty() &&
+                device.removalGroupId == m_safeStopRemovalGroupId) {
+            m_loadBlockedDeviceIds.insert(device.deviceId);
+            if (!m_safeStopBlockedDeviceIds.contains(device.deviceId)) {
+                m_safeStopBlockedDeviceIds.append(device.deviceId);
+            }
+            for (const QString& mountPoint : device.mountPoints) {
+                const QString root = QDir::cleanPath(mountPoint);
+                if (!m_safeStopBlockedMountPoints.contains(root)) {
+                    m_safeStopBlockedMountPoints.append(root);
+                }
+            }
+        }
+        if (m_loadBlockedDeviceIds.contains(device.deviceId)) {
+            device.state = mixxx::removablemedia::MediaState::Quiescing;
+        } else {
+            device.state = mixxx::removablemedia::MediaState::Scanning;
+        }
+    }
+    m_mediaDevices = snapshot;
+    emit devicesChanged();
+    m_devicesFuture = QtConcurrent::run(
+            findRekordboxDevices,
+            snapshot,
+            m_activeScanGeneration,
+            m_loadBlockedDeviceIds);
     m_devicesFutureWatcher.setFuture(m_devicesFuture);
     emit deviceScanStateChanged();
+}
+
+void RekordboxFeature::onRemovableMediaDevicesChanged() {
+    if (!isDeviceScanRunning()) {
+        // startDeviceScan() acquires the apply fence before it publishes the
+        // service's new snapshot, closing the idle notification window.
+        startDeviceScan();
+        return;
+    }
+    m_mediaDevices = m_pRemovableMediaService->devices();
+    for (auto& device : m_mediaDevices) {
+        if (!m_safeStopRemovalGroupId.isEmpty() &&
+                device.removalGroupId == m_safeStopRemovalGroupId) {
+            m_loadBlockedDeviceIds.insert(device.deviceId);
+            if (!m_safeStopBlockedDeviceIds.contains(device.deviceId)) {
+                m_safeStopBlockedDeviceIds.append(device.deviceId);
+            }
+            for (const QString& mountPoint : device.mountPoints) {
+                const QString root = QDir::cleanPath(mountPoint);
+                if (!m_safeStopBlockedMountPoints.contains(root)) {
+                    m_safeStopBlockedMountPoints.append(root);
+                }
+            }
+        }
+        device.state = m_loadBlockedDeviceIds.contains(device.deviceId)
+                ? mixxx::removablemedia::MediaState::Quiescing
+                : mixxx::removablemedia::MediaState::Scanning;
+    }
+    emit devicesChanged();
+    startDeviceScan();
+}
+
+QString RekordboxFeature::deviceIdForLocation(const QString& location) const {
+    for (const auto& device : m_mediaDevices) {
+        for (const QString& mountPoint : device.mountPoints) {
+            if (pathIsWithinMount(location, mountPoint)) {
+                return device.deviceId;
+            }
+        }
+    }
+    return {};
+}
+
+bool RekordboxFeature::isLocationLoadAllowed(const QString& location) const {
+    for (const QString& mountPoint : m_safeStopBlockedMountPoints) {
+        if (pathIsWithinMount(location, mountPoint)) {
+            return false;
+        }
+    }
+    const QString deviceId = deviceIdForLocation(location);
+    return deviceId.isEmpty() || !m_loadBlockedDeviceIds.contains(deviceId);
+}
+
+bool RekordboxFeature::isSafeStopActiveFor(
+        const QString& deviceId) const {
+    return !deviceId.isEmpty() &&
+            deviceId == m_safeStopOperationDeviceId;
+}
+
+bool RekordboxFeature::requestSafeStop(
+        const QString& deviceId,
+        quint64 expectedGeneration) {
+    if (!m_safeStopOperationDeviceId.isEmpty()) {
+        if (deviceId == m_safeStopOperationDeviceId) {
+            // The public API has no operation token. Treat a repeated request
+            // for the accepted target as an idempotent join so a synthetic
+            // same-ID Busy result cannot masquerade as its terminal result.
+            return true;
+        }
+        rejectSafeStop(deviceId,
+                tr("Another removable-media stop operation is in progress."));
+        return false;
+    }
+
+    const auto deviceIt = std::find_if(m_mediaDevices.cbegin(),
+            m_mediaDevices.cend(),
+            [&deviceId](const auto& device) {
+                return device.deviceId == deviceId;
+            });
+    if (deviceIt == m_mediaDevices.cend()) {
+        mixxx::removablemedia::SafeStopResult result;
+        result.deviceId = deviceId;
+        result.state = mixxx::removablemedia::MediaState::Failed;
+        result.errorCode = mixxx::removablemedia::ErrorCode::NotFound;
+        result.errorMessage = tr("The selected removable device is no longer present.");
+        onSafeStopFinished(result);
+        return false;
+    }
+    if (deviceIt->generation != expectedGeneration) {
+        mixxx::removablemedia::SafeStopResult result;
+        result.deviceId = deviceId;
+        result.state = mixxx::removablemedia::MediaState::Failed;
+        result.errorCode = mixxx::removablemedia::ErrorCode::StaleGeneration;
+        result.errorMessage = tr("The removable device list changed. Select the device again.");
+        onSafeStopFinished(result);
+        return false;
+    }
+    if (isDeviceScanRunning()) {
+        rejectSafeStop(deviceId, tr("A removable-media scan is still running."));
+        return false;
+    }
+    if (isDatabaseImportRunning()) {
+        rejectSafeStop(deviceId, tr("The Rekordbox database is still being imported."));
+        return false;
+    }
+    if (!deviceIt->canStop) {
+        mixxx::removablemedia::SafeStopResult result;
+        result.deviceId = deviceId;
+        result.state = mixxx::removablemedia::MediaState::Failed;
+        result.errorCode = mixxx::removablemedia::ErrorCode::Unsupported;
+        result.errorMessage = tr("Safe removal is unavailable on this platform adapter.");
+        onSafeStopFinished(result);
+        return false;
+    }
+
+    m_safeStopOperationDeviceId = deviceId;
+    m_safeStopRemovalGroupId = deviceIt->removalGroupId;
+    m_safeStopBlockedDeviceIds.clear();
+    m_safeStopBlockedMountPoints.clear();
+    for (const auto& device : std::as_const(m_mediaDevices)) {
+        if (device.removalGroupId == deviceIt->removalGroupId) {
+            m_loadBlockedDeviceIds.insert(device.deviceId);
+            m_safeStopBlockedDeviceIds.append(device.deviceId);
+            for (const QString& mountPoint : device.mountPoints) {
+                const QString root = QDir::cleanPath(mountPoint);
+                if (!m_safeStopBlockedMountPoints.contains(root)) {
+                    m_safeStopBlockedMountPoints.append(root);
+                }
+            }
+        }
+    }
+    // Freeze the entire physical removal group before publishing any state.
+    // A synchronous devicesChanged observer must never see one partition as
+    // quiescing while a sibling partition can still pass LOAD admission.
+    for (auto& device : m_mediaDevices) {
+        if (device.removalGroupId == m_safeStopRemovalGroupId) {
+            device.state = mixxx::removablemedia::MediaState::Quiescing;
+            device.errorCode = mixxx::removablemedia::ErrorCode::None;
+            device.errorMessage.clear();
+            device.busyReason.clear();
+        }
+    }
+    emit devicesChanged();
+    return m_pRemovableMediaService->requestSafeStop(
+            deviceId, expectedGeneration);
+}
+
+void RekordboxFeature::rejectSafeStop(
+        const QString& deviceId,
+        const QString& busyReason) {
+    if (isSafeStopActiveFor(deviceId)) {
+        return;
+    }
+    mixxx::removablemedia::SafeStopResult result;
+    result.deviceId = deviceId;
+    result.state = mixxx::removablemedia::MediaState::Busy;
+    result.errorCode = mixxx::removablemedia::ErrorCode::Busy;
+    result.errorMessage = busyReason;
+    if (!m_safeStopOperationDeviceId.isEmpty()) {
+        // A concurrent rejection is a terminal result only for the new
+        // request. It must never release or overwrite the accepted
+        // operation's removal-group LOAD gates.
+        emit safeStopFinished(result);
+        return;
+    }
+    onSafeStopFinished(result);
+}
+
+void RekordboxFeature::setMediaDeviceState(
+        const QString& deviceId,
+        mixxx::removablemedia::MediaState state,
+        mixxx::removablemedia::ErrorCode errorCode,
+        const QString& errorMessage,
+        const QString& busyReason) {
+    for (auto& device : m_mediaDevices) {
+        if (device.deviceId != deviceId) {
+            continue;
+        }
+        device.state = state;
+        device.errorCode = errorCode;
+        device.errorMessage = errorMessage;
+        device.busyReason = busyReason;
+        emit devicesChanged();
+        return;
+    }
+}
+
+void RekordboxFeature::onSafeStopFinished(
+        const mixxx::removablemedia::SafeStopResult& result) {
+    QStringList terminalDeviceIds;
+    const bool completedAcceptedOperation =
+            result.deviceId == m_safeStopOperationDeviceId;
+    if (completedAcceptedOperation) {
+        terminalDeviceIds = m_safeStopBlockedDeviceIds;
+    }
+    if (terminalDeviceIds.isEmpty()) {
+        terminalDeviceIds.append(result.deviceId);
+    }
+    for (const QString& deviceId : std::as_const(terminalDeviceIds)) {
+        setMediaDeviceState(deviceId,
+                result.state,
+                result.errorCode,
+                result.errorMessage,
+                result.state == mixxx::removablemedia::MediaState::Busy
+                        ? result.errorMessage
+                        : QString());
+    }
+    emit safeStopFinished(result);
+    if (completedAcceptedOperation) {
+        // Keep every LOAD/STOP gate and the operation correlation token live
+        // through all terminal model and result notifications. Reentrant
+        // observers must not be able to start a new load or physical stop
+        // before the matching terminal result has actually been published.
+        for (const QString& deviceId :
+                std::as_const(m_safeStopBlockedDeviceIds)) {
+            m_loadBlockedDeviceIds.remove(deviceId);
+        }
+        m_safeStopBlockedDeviceIds.clear();
+        m_safeStopBlockedMountPoints.clear();
+        m_safeStopRemovalGroupId.clear();
+        m_safeStopOperationDeviceId.clear();
+        // Rescan only after the platform operation and authoritative
+        // reconciliation reached a terminal state. While the group was
+        // quiescing, worker scans explicitly skipped every blocked device.
+        startDeviceScan();
+    }
 }
 
 QString RekordboxFeature::formatRootViewHtml() const {
@@ -1800,8 +2122,25 @@ void RekordboxFeature::activateChild(const QModelIndex& index) {
     // IS_NOT_RECORDBOX_DEVICE, the 1st element is the playlist path and it is
     // activated.
     QList<QVariant> data = item->getData().toList();
+    if (data.size() < 2) {
+        return;
+    }
     QString playlist = data[0].toString();
     bool doParseDeviceDB = data[1].toString() == IS_RECORDBOX_DEVICE;
+
+    TreeItem* deviceItem = item;
+    while (deviceItem->parent() && !deviceItem->parent()->isRoot()) {
+        deviceItem = deviceItem->parent();
+    }
+    const QString deviceId = treeItemDeviceId(deviceItem);
+    const QVariantList deviceData = deviceItem->getData().toList();
+    const quint64 generation = deviceData.size() > 3
+            ? deviceData.at(3).toULongLong()
+            : 0;
+    if (!deviceId.isEmpty() && m_loadBlockedDeviceIds.contains(deviceId)) {
+        qWarning() << "Ignoring load from quiescing removable media" << deviceId;
+        return;
+    }
 
     const QString deviceLabel = item->getLabel();
     qDebug() << "RekordboxFeature::activateChild " << deviceLabel
@@ -1810,12 +2149,18 @@ void RekordboxFeature::activateChild(const QModelIndex& index) {
     if (doParseDeviceDB) {
         qDebug() << "Parse Rekordbox Device DB: " << playlist;
 
+        m_activeImportDeviceId = deviceId;
+        m_activeImportGeneration = generation;
+        // Keep import ownership through the queued result-application slot.
+        m_databaseImportApplyPending = true;
         // Let a worker thread do the XML parsing
         m_tracksFuture = QtConcurrent::run(
                 parseDeviceDB,
                 static_cast<Library*>(parent())->dbConnectionPool(),
                 deviceLabel,
-                playlist);
+                playlist,
+                deviceId,
+                generation);
         m_tracksFutureWatcher.setFuture(m_tracksFuture);
         emit databaseImportStateChanged();
 
@@ -1825,91 +2170,184 @@ void RekordboxFeature::activateChild(const QModelIndex& index) {
         item->setData(QVariant(data));
     } else {
         qDebug() << "Activate Rekordbox Playlist: " << playlist;
+        m_activeDeviceId = deviceId;
         m_pRekordboxPlaylistModel->setPlaylist(playlist);
         emit showTrackModel(m_pRekordboxPlaylistModel);
     }
 }
 
 void RekordboxFeature::onRekordboxDevicesFound() {
-    const QList<TreeItem*> result = m_devicesFuture.result();
-    auto foundDevices = std::vector<std::unique_ptr<TreeItem>>(result.cbegin(), result.cend());
+    const RekordboxDeviceScanResult result = m_devicesFuture.result();
+    auto foundDevices = std::vector<std::unique_ptr<TreeItem>>(
+            result.treeItems.cbegin(), result.treeItems.cend());
+
+    const bool staleResult =
+            result.generation != m_pRemovableMediaService->generation();
+    const bool rerunScan = m_deviceScanPending || staleResult;
+    m_deviceScanPending = false;
+    if (staleResult) {
+        qDebug() << "Discarding stale Rekordbox media scan generation"
+                 << result.generation << "current"
+                 << m_pRemovableMediaService->generation();
+        if (rerunScan) {
+            // Transfer ownership directly to the replacement generation. A
+            // synchronous signal observer must never see an idle admission
+            // window between a completed scan and its pending successor.
+            startDeviceScan(true);
+        } else {
+            m_deviceScanApplyPending = false;
+            emit deviceScanStateChanged();
+        }
+        return;
+    }
 
     clearLastRightClickedIndex();
 
     TreeItem* root = m_pSidebarModel->getRootItem();
     QSqlDatabase database = m_pTrackCollection->database();
 
-    if (foundDevices.size() == 0) {
-        // No Rekordbox devices found
-        ScopedTransaction transaction(database);
+    QSet<QString> foundDeviceIds;
+    for (const auto& pDeviceFound : foundDevices) {
+        foundDeviceIds.insert(treeItemDeviceId(pDeviceFound.get()));
+    }
+    // Keep existing source nodes inert while STOP owns their LOAD gates.
+    // A terminal scan removes them after success or refreshes them after
+    // failure without reading the group during quiesce.
+    foundDeviceIds.unite(m_loadBlockedDeviceIds);
 
-        dropTable(database, kRekordboxPlaylistTracksTable);
-        dropTable(database, kRekordboxPlaylistsTable);
-        dropTable(database, kRekordboxLibraryTable);
-
-        // Create new temporary Rekordbox database tables
-        createLibraryTable(database, kRekordboxLibraryTable);
-        createPlaylistsTable(database, kRekordboxPlaylistsTable);
-        createPlaylistTracksTable(database, kRekordboxPlaylistTracksTable);
-
-        transaction.commit();
-
-        if (root->childRows() > 0) {
-            // Devices have since been unmounted
-            m_pSidebarModel->removeRows(0, root->childRows());
+    // Remove backwards so adjacent removals cannot skip an item.
+    for (int deviceIndex = root->childRows() - 1; deviceIndex >= 0; --deviceIndex) {
+        TreeItem* child = root->child(deviceIndex);
+        const QString deviceId = treeItemDeviceId(child);
+        if (foundDeviceIds.contains(deviceId)) {
+            continue;
         }
-    } else {
-        for (int deviceIndex = 0; deviceIndex < root->childRows(); deviceIndex++) {
-            TreeItem* child = root->child(deviceIndex);
-            bool removeChild = true;
-
-            for (const auto& pDeviceFound : foundDevices) {
-                if (pDeviceFound->getLabel() == child->getLabel()) {
-                    removeChild = false;
-                    break;
-                }
-            }
-
-            if (removeChild) {
-                // Device has since been unmounted, cleanup DB
-                clearDeviceTables(database, child);
-
-                m_pSidebarModel->removeRows(deviceIndex, 1);
-            }
-        }
-
-        std::vector<std::unique_ptr<TreeItem>> childrenToAdd;
-
-        for (auto&& pDeviceFound : foundDevices) {
-            bool addNewChild = true;
-            for (int deviceIndex = 0; deviceIndex < root->childRows(); deviceIndex++) {
-                TreeItem* child = root->child(deviceIndex);
-
-                if (pDeviceFound->getLabel() == child->getLabel()) {
-                    // This device already exists in the TreeModel, don't add or parse is again
-                    addNewChild = false;
-                }
-            }
-
-            if (addNewChild) {
-                childrenToAdd.push_back(std::move(pDeviceFound));
-            }
-        }
-
-        if (!childrenToAdd.empty()) {
-            m_pSidebarModel->insertTreeItemRows(std::move(childrenToAdd), 0);
+        clearDeviceTables(database, child);
+        const bool removedActiveDevice = deviceId == m_activeDeviceId;
+        m_pSidebarModel->removeRows(deviceIndex, 1);
+        m_loadBlockedDeviceIds.remove(deviceId);
+        if (removedActiveDevice) {
+            m_activeDeviceId.clear();
+            m_pRekordboxPlaylistModel->setPlaylist(QString());
+            emit showTrackModel(nullptr);
+            emit activeDeviceRemoved(deviceId);
         }
     }
 
+    std::vector<std::unique_ptr<TreeItem>> childrenToAdd;
+    for (auto&& pDeviceFound : foundDevices) {
+        const QString deviceId = treeItemDeviceId(pDeviceFound.get());
+        TreeItem* existing = nullptr;
+        int existingRow = -1;
+        for (int deviceIndex = 0; deviceIndex < root->childRows(); ++deviceIndex) {
+            TreeItem* child = root->child(deviceIndex);
+            if (treeItemDeviceId(child) == deviceId) {
+                existing = child;
+                existingRow = deviceIndex;
+                break;
+            }
+        }
+
+        if (!existing) {
+            childrenToAdd.push_back(std::move(pDeviceFound));
+            continue;
+        }
+
+        if (treeItemDevicePath(existing) !=
+                treeItemDevicePath(pDeviceFound.get())) {
+            const bool migratedActiveDevice =
+                    deviceId == m_activeDeviceId;
+            clearDeviceTables(database, existing);
+            m_pSidebarModel->removeRows(existingRow, 1);
+            childrenToAdd.push_back(std::move(pDeviceFound));
+            if (migratedActiveDevice) {
+                m_activeDeviceId.clear();
+                m_pRekordboxPlaylistModel->setPlaylist(QString());
+                emit showTrackModel(nullptr);
+                emit activeDeviceRemoved(deviceId);
+            }
+            continue;
+        }
+
+        QVariantList refreshedData = pDeviceFound->getData().toList();
+        const QVariantList existingData = existing->getData().toList();
+        if (refreshedData.size() > 1 && existingData.size() > 1) {
+            // Preserve whether this still-unmoved device has already been
+            // imported while updating its generation fence.
+            refreshedData[1] = existingData.at(1);
+        }
+        existing->setData(refreshedData);
+        if (!existing->hasChildren()) {
+            existing->setLabel(pDeviceFound->getLabel());
+        }
+    }
+
+    if (!childrenToAdd.empty()) {
+        m_pSidebarModel->insertTreeItemRows(std::move(childrenToAdd), 0);
+    }
+    m_pSidebarModel->triggerRepaint();
+
+    m_mediaDevices = result.mediaDevices;
+    for (auto& device : m_mediaDevices) {
+        if (m_loadBlockedDeviceIds.contains(device.deviceId)) {
+            device.state = mixxx::removablemedia::MediaState::Quiescing;
+        }
+    }
     emit devicesChanged();
-    emit deviceScanStateChanged();
 
     // Calls a slot in the sidebar model such that isLoading is removed from
     // the feature title. A QML status-only scan does not set feature loading.
-    m_title = tr("Rekordbox");
-    if (m_featureLoadingRequested) {
-        m_featureLoadingRequested = false;
-        emit featureLoadingFinished(this);
+    if (rerunScan) {
+        // Keep the apply fence continuously owned while this result is
+        // replaced by the pending generation. startDeviceScan(true) publishes
+        // the next scanning state without an observable idle transition.
+        startDeviceScan(true);
+    } else {
+        m_deviceScanApplyPending = false;
+        emit deviceScanStateChanged();
+        m_title = tr("Rekordbox");
+        if (m_featureLoadingRequested) {
+            m_featureLoadingRequested = false;
+            emit featureLoadingFinished(this);
+        }
+    }
+}
+
+void RekordboxFeature::makeDeviceImportRetryable(
+        const QString& deviceId,
+        const QString& devicePath,
+        const QString& deviceLabel) {
+    if (deviceId.isEmpty()) {
+        return;
+    }
+
+    // The worker may have committed before its generation became stale.
+    // Always remove rows by opaque device identity before allowing a retry.
+    TreeItem staleDevice(deviceLabel,
+            QVariantList{devicePath,
+                    QStringLiteral(IS_RECORDBOX_DEVICE),
+                    deviceId});
+    QSqlDatabase database = m_pTrackCollection->database();
+    clearDeviceTables(database, &staleDevice);
+
+    TreeItem* root = m_pSidebarModel->getRootItem();
+    if (!root) {
+        return;
+    }
+    for (int deviceIndex = 0; deviceIndex < root->childRows(); ++deviceIndex) {
+        TreeItem* candidate = root->child(deviceIndex);
+        if (treeItemDeviceId(candidate) != deviceId) {
+            continue;
+        }
+        QVariantList currentData = candidate->getData().toList();
+        if (currentData.size() > 1) {
+            // Preserve the current path and generation. A scan may have
+            // refreshed them while this import was running.
+            currentData[1] = QStringLiteral(IS_RECORDBOX_DEVICE);
+            candidate->setData(currentData);
+            m_pSidebarModel->triggerRepaint();
+        }
+        return;
     }
 }
 
@@ -1921,6 +2359,53 @@ void RekordboxFeature::onTracksFound() {
         importResult = m_tracksFuture.result();
     } catch (const std::exception& e) {
         qWarning() << "Failed to load Rekordbox database:" << e.what();
+        makeDeviceImportRetryable(m_activeImportDeviceId);
+        setMediaDeviceState(m_activeImportDeviceId,
+                mixxx::removablemedia::MediaState::Failed,
+                mixxx::removablemedia::ErrorCode::InvalidDatabase,
+                tr("The Rekordbox database import failed."));
+        m_activeImportDeviceId.clear();
+        m_activeImportGeneration = 0;
+        m_databaseImportApplyPending = false;
+        return;
+    }
+
+    const bool deviceStillPresent = std::any_of(m_mediaDevices.cbegin(),
+            m_mediaDevices.cend(),
+            [&importResult](const auto& device) {
+                return device.deviceId == importResult.deviceId &&
+                        device.generation == importResult.generation;
+            });
+    if (importResult.deviceId != m_activeImportDeviceId ||
+            importResult.generation != m_activeImportGeneration ||
+            importResult.generation != m_pRemovableMediaService->generation() ||
+            !deviceStillPresent) {
+        qWarning() << "Discarding stale Rekordbox import for"
+                   << importResult.deviceId << "generation"
+                   << importResult.generation;
+        makeDeviceImportRetryable(
+                importResult.deviceId.isEmpty()
+                        ? m_activeImportDeviceId
+                        : importResult.deviceId,
+                importResult.devicePath,
+                importResult.deviceLabel);
+        m_activeImportDeviceId.clear();
+        m_activeImportGeneration = 0;
+        m_databaseImportApplyPending = false;
+        return;
+    }
+
+    if (!importResult.succeeded) {
+        makeDeviceImportRetryable(importResult.deviceId,
+                importResult.devicePath,
+                importResult.deviceLabel);
+        setMediaDeviceState(importResult.deviceId,
+                mixxx::removablemedia::MediaState::Failed,
+                mixxx::removablemedia::ErrorCode::InvalidDatabase,
+                tr("The Rekordbox database import failed."));
+        m_activeImportDeviceId.clear();
+        m_activeImportGeneration = 0;
+        m_databaseImportApplyPending = false;
         return;
     }
 
@@ -1929,8 +2414,7 @@ void RekordboxFeature::onTracksFound() {
     TreeItem* root = m_pSidebarModel->getRootItem();
     for (int deviceIndex = 0; deviceIndex < root->childRows(); ++deviceIndex) {
         TreeItem* candidate = root->child(deviceIndex);
-        const QList<QVariant> data = candidate->getData().toList();
-        if (!data.isEmpty() && data.constFirst().toString() == devicePlaylist) {
+        if (treeItemDeviceId(candidate) == importResult.deviceId) {
             deviceItem = candidate;
             break;
         }
@@ -1965,6 +2449,10 @@ void RekordboxFeature::onTracksFound() {
 
     qDebug() << "Show Rekordbox Device Playlist: " << devicePlaylist;
 
+    m_activeDeviceId = importResult.deviceId;
     m_pRekordboxPlaylistModel->setPlaylist(devicePlaylist);
     emit showTrackModel(m_pRekordboxPlaylistModel);
+    m_activeImportDeviceId.clear();
+    m_activeImportGeneration = 0;
+    m_databaseImportApplyPending = false;
 }

@@ -201,6 +201,13 @@ void PlayerManager::bindToLibrary(Library* pLibrary) {
     }
 }
 
+bool PlayerManager::isTrackLoadAllowed(
+        const TrackPointer& pTrack) const {
+    return !pTrack || !m_pLibrary ||
+            m_pLibrary->isRemovableMediaLocationLoadAllowed(
+                    pTrack->getLocation());
+}
+
 QStringList PlayerManager::getVisualPlayerGroups() {
     QStringList groups;
     for (const auto& pDeck : std::as_const(m_decks)) {
@@ -600,6 +607,13 @@ void PlayerManager::slotCloneDeck(const QString& source_group, const QString& ta
 void PlayerManager::slotLoadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play) {
     // Do not lock mutex in this method unless it is changed to access
     // PlayerManager state.
+    if (pTrack && m_pLibrary &&
+            !m_pLibrary->isRemovableMediaLocationLoadAllowed(
+                    pTrack->getLocation())) {
+        kLogger.warning() << "Blocked final LOAD admission from quiescing media"
+                          << pTrack->getLocation() << group;
+        return;
+    }
     BaseTrackPlayer* pPlayer = getPlayer(group);
 
     if (pPlayer == nullptr) {
@@ -656,6 +670,12 @@ void PlayerManager::slotLoadTrackToPlayer(TrackPointer pTrack, const QString& gr
 
 void PlayerManager::slotLoadLocationToPlayer(
         const QString& location, const QString& group, bool play) {
+    if (m_pLibrary &&
+            !m_pLibrary->isRemovableMediaLocationLoadAllowed(location)) {
+        kLogger.warning() << "Blocked location LOAD from quiescing media"
+                          << location << group;
+        return;
+    }
     // The library will get the track and then signal back to us to load the
     // track via slotLoadTrackToPlayer.
     emit loadLocationToPlayer(location, group, play);
@@ -693,6 +713,13 @@ void PlayerManager::slotLoadToSampler(const QString& location, int sampler) {
 }
 
 void PlayerManager::slotLoadTrackIntoNextAvailableDeck(TrackPointer pTrack) {
+    if (pTrack && m_pLibrary &&
+            !m_pLibrary->isRemovableMediaLocationLoadAllowed(
+                    pTrack->getLocation())) {
+        kLogger.warning() << "Blocked deck LOAD from quiescing media"
+                          << pTrack->getLocation();
+        return;
+    }
     auto locker = lockMutex(&m_mutex);
     BaseTrackPlayer* pDeck = findFirstStoppedPlayerInList(m_decks);
     if (pDeck == nullptr) {
@@ -715,6 +742,13 @@ void PlayerManager::slotLoadLocationIntoNextAvailableDeck(const QString& locatio
 }
 
 void PlayerManager::slotLoadTrackIntoNextAvailableSampler(TrackPointer pTrack) {
+    if (pTrack && m_pLibrary &&
+            !m_pLibrary->isRemovableMediaLocationLoadAllowed(
+                    pTrack->getLocation())) {
+        kLogger.warning() << "Blocked sampler LOAD from quiescing media"
+                          << pTrack->getLocation();
+        return;
+    }
     auto locker = lockMutex(&m_mutex);
     BaseTrackPlayer* pSampler = findFirstStoppedPlayerInList(m_samplers);
     if (pSampler == nullptr) {
