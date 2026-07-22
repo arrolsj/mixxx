@@ -15,6 +15,12 @@ using ::testing::Return;
 using ::testing::Sequence;
 using ::testing::SetArrayArgument;
 
+#if defined(PM_DEVICEINFO_VERS) && PM_DEVICEINFO_VERS >= 200
+constexpr PmError kPortMidiDeviceRemovedError = pmDeviceRemoved;
+#else
+constexpr PmError kPortMidiDeviceRemovedError = pmHostError;
+#endif
+
 class MockPortMidiController : public PortMidiController {
   public:
     MockPortMidiController(const PmDeviceInfo* inputDeviceInfo,
@@ -194,7 +200,7 @@ TEST_F(PortMidiControllerTest, Open_DeviceRemovedDuringMappingStaysClosed) {
     EXPECT_CALL(*m_mockOutput, openOutput())
             .WillOnce(Return(pmNoError));
     EXPECT_CALL(*m_mockOutput, writeShort(_))
-            .WillOnce(Return(pmDeviceRemoved));
+            .WillOnce(Return(kPortMidiDeviceRemovedError));
     EXPECT_CALL(*m_mockOutput, close())
             .WillOnce(Return(pmNoError));
 
@@ -212,7 +218,7 @@ TEST_F(PortMidiControllerTest, WriteAfterDeviceRemovedIsSuppressed) {
     EXPECT_CALL(*m_mockOutput, isOpen())
             .WillRepeatedly(Return(true));
     EXPECT_CALL(*m_mockOutput, writeShort(_))
-            .WillOnce(Return(pmDeviceRemoved));
+            .WillOnce(Return(kPortMidiDeviceRemovedError));
 
     m_pController->sendShortMsg(0x90, 0x3C, 0x40);
     EXPECT_TRUE(deviceDisconnected());
@@ -292,7 +298,7 @@ TEST_F(PortMidiControllerTest, Poll_DeviceRemovedMarksControllerDisconnected) {
     EXPECT_CALL(*m_mockInput, isOpen())
             .WillRepeatedly(Return(true));
     EXPECT_CALL(*m_mockInput, read(NotNull(), _))
-            .WillOnce(Return(pmDeviceRemoved));
+            .WillOnce(Return(kPortMidiDeviceRemovedError));
 
     EXPECT_FALSE(deviceDisconnected());
     pollDevice();

@@ -17,8 +17,13 @@ QString portMidiString(const char* value) {
 }
 
 bool isDisconnectError(PmError error) {
-    return error == pmDeviceRemoved || error == pmHostError ||
-            error == pmBadPtr || error == pmInvalidDeviceId;
+#if defined(PM_DEVICEINFO_VERS) && PM_DEVICEINFO_VERS >= 200
+    if (error == pmDeviceRemoved) {
+        return true;
+    }
+#endif
+    return error == pmHostError || error == pmBadPtr ||
+            error == pmInvalidDeviceId;
 }
 
 #if defined(__WINDOWS__)
