@@ -127,7 +127,7 @@ Item {
         property real displayedPlayPosition: playPositionControl.value
 
         Timer {
-            interval: 16
+            interval: 8
             repeat: true
             running: root.deckPlayer.isLoaded
             onTriggered: {
