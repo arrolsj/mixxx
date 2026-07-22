@@ -1,71 +1,36 @@
-import Mixxx 1.0 as Mixxx
 import QtQuick 2.15
-import QtQuick.Shapes 1.4
-import QtQuick.Window 2.15
-
-import QtQuick.Controls 2.15
-
-import "Theme"
+import QtQuick.Shapes 1.15
 
 Item {
     id: root
 
-    property color color: Theme.waveformMarkerDefault
+    property color color: "#F8A030"
+    property real markerWidth: 10
+    property real markerHeight: 8
 
-    property real markerHeight: root.height
-    property color labelColor: Theme.waveformMarkerLabel
-    property real radiusSize: 4
-    property string cueLabel: qsTr("CUE")
-
-    FontMetrics {
-        id: fontMetrics
-        font.family: Theme.fontFamily
+    Rectangle {
+        x: Math.round((root.width - width) / 2)
+        y: 0
+        width: 1
+        height: Math.max(0, root.height - root.markerHeight)
+        color: root.color
     }
 
-    property rect contentRect: fontMetrics.tightBoundingRect(cueLabel)
-
     Shape {
-        ShapePath {
-            strokeWidth: 0
-            strokeColor: 'transparent'
-            fillColor: color
-            strokeStyle: ShapePath.SolidLine
-            startX: -1; startY: 0
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        width: root.markerWidth
+        height: root.markerHeight
 
-            PathLine { x: 8; y: 0 }
-            PathLine { x: 8 - radiusSize + contentRect.width; y: 0 }
-            PathArc {
-                x: 8 + contentRect.width
-                y: radiusSize
-                radiusX: radiusSize; radiusY: radiusSize
-                direction: PathArc.Clockwise
-            }
-            PathLine { x: 8 + contentRect.width; y: 16 - radiusSize }
-            PathArc {
-                x: 8 - radiusSize + contentRect.width
-                y: 16
-                radiusX: radiusSize; radiusY: radiusSize
-                direction: PathArc.Clockwise
-            }
-            PathLine { x: 8; y: 16 }
-            PathLine { x: 2; y: 16 }
-            PathLine { x: 2; y: markerHeight }
-            PathLine { x: -1; y: markerHeight }
-            PathLine { x: -1; y: 0 }
-        }
-    }
-    Shape {
         ShapePath {
-            fillColor: labelColor
-            strokeColor: labelColor
-            PathText {
-                x: 3
-                y: 3
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-                font.weight: Font.Bold
-                text: cueLabel
-            }
+            fillColor: root.color
+            strokeColor: "#081012"
+            strokeWidth: 1
+            startX: 0
+            startY: root.markerHeight
+            PathLine { x: root.markerWidth; y: root.markerHeight }
+            PathLine { x: root.markerWidth / 2; y: 0 }
+            PathLine { x: 0; y: root.markerHeight }
         }
     }
 }

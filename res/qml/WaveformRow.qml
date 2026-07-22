@@ -16,6 +16,9 @@ Item {
 
     property string group // required
     property var deckPlayer: Mixxx.PlayerManager.getPlayer(group)
+    property color memoryCueColor: "#FF0000"
+    property color loopCueColor: "#F8A030"
+    property color mainCueColor: "#F8A030"
 
     Item {
         id: waveformContainer
@@ -248,16 +251,41 @@ Item {
                     required property string label
                     required property bool isLoop
                     required property int hotcueNumber
+                    required property color color
 
                     Skin.WaveformHotcue {
                         group: root.group
                         hotcueNumber: cue.hotcueNumber + 1
                         label: cue.label
                         isLoop: cue.isLoop
+                        cueColor: cue.color
+                        loopColor: root.loopCueColor
 
                         x: (startPosition * 2 / samplesControl.value) * waveform.width
-                        width: cue.isLoop ? ((endPosition - startPosition) * 2 / samplesControl.value) * waveform.width : null
+                        width: cue.isLoop
+                                ? ((endPosition - startPosition) * 2 / samplesControl.value) * waveform.width
+                                : markerSize
                         height: waveform.height
+                    }
+                }
+            }
+
+            Repeater {
+                model: root.deckPlayer.memoryCuesModel
+
+                Item {
+                    id: memoryCue
+
+                    required property int startPosition
+
+                    x: (startPosition * 2 / samplesControl.value) * waveform.width - width / 2
+                    width: 10
+                    height: waveform.height
+                    z: 3
+
+                    Skin.WaveformMemoryCue {
+                        anchors.fill: parent
+                        color: root.memoryCueColor
                     }
                 }
             }
@@ -265,8 +293,12 @@ Item {
             Skin.WaveformCue {
                 id: maincue
 
+                visible: mainCuePosition.value >= 0
                 height: waveform.height
-                x: (mainCuePosition.value / samplesControl.value) * waveform.width
+                width: 10
+                x: (mainCuePosition.value / samplesControl.value) * waveform.width - width / 2
+                color: root.mainCueColor
+                z: 4
             }
         }
     }
