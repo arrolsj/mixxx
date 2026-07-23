@@ -113,6 +113,13 @@ class CachingReader : public QObject {
     // for this to take effect.
     void newTrack(TrackPointer pTrack);
 
+    // Returns true only after the worker has closed the current SoundSource
+    // and the engine thread has consumed the corresponding TRACK_UNLOADED
+    // status update.
+    bool isTrackUnloaded() const {
+        return m_state.loadAcquire() == STATE_IDLE;
+    }
+
     void setScheduler(EngineWorkerScheduler* pScheduler) {
         m_worker.setScheduler(pScheduler);
     }

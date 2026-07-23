@@ -409,10 +409,15 @@ void BaseTrackPlayerImpl::stopAndEjectTrack() {
     if (!m_pLoadedTrack) {
         return;
     }
-    // EngineBuffer::ejectTrack() also stops playback and synchronously closes
-    // the reader before publishing the player-empty notification. Bypass the
-    // manual eject control restrictions for playing and double-clicking.
+    // EngineBuffer::ejectTrack() stops playback immediately and schedules the
+    // reader to close its SoundSource on the worker thread. Bypass the manual
+    // eject control restrictions for playing and double-clicking.
     m_pChannel->getEngineBuffer()->ejectTrack();
+}
+
+bool BaseTrackPlayerImpl::isTrackReleased() const {
+    return !m_pLoadedTrack &&
+            m_pChannel->getEngineBuffer()->isTrackReaderIdle();
 }
 
 TrackPointer BaseTrackPlayerImpl::unloadTrack() {

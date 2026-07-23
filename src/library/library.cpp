@@ -958,5 +958,18 @@ bool Library::requestRemovableMediaSafeStop(
                         pPlayer->stopAndEjectTrack();
                     }
                 }
+            },
+            [pPlayerManager = m_pPlayerManager, loadedGroups] {
+                if (!pPlayerManager) {
+                    return false;
+                }
+                for (const QString& group : loadedGroups) {
+                    BaseTrackPlayer* pPlayer =
+                            pPlayerManager->getPlayer(group);
+                    if (!pPlayer || !pPlayer->isTrackReleased()) {
+                        return false;
+                    }
+                }
+                return true;
             });
 }

@@ -24,11 +24,13 @@
 
 #pragma once
 
+#include <QElapsedTimer>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QList>
 #include <QSet>
 #include <QStringListModel>
+#include <QTimer>
 #include <QtConcurrentRun>
 #include <fstream>
 #include <functional>
@@ -102,7 +104,8 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     bool requestSafeStop(
             const QString& deviceId,
             quint64 expectedGeneration,
-            const std::function<void()>& releaseMediaReferences = {});
+            const std::function<void()>& releaseMediaReferences = {},
+            const std::function<bool()>& mediaReferencesReleased = {});
     bool isSafeStopActiveFor(const QString& deviceId) const;
     void rejectSafeStop(const QString& deviceId, const QString& busyReason);
     bool isLocationLoadAllowed(const QString& location) const;
@@ -168,6 +171,10 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     QStringList m_safeStopBlockedMountPoints;
     QString m_safeStopOperationDeviceId;
     QString m_safeStopRemovalGroupId;
+    QTimer m_safeStopReferenceReleaseTimer;
+    QElapsedTimer m_safeStopReferenceReleaseElapsed;
+    std::function<bool()> m_safeStopReferencesReleased;
+    std::function<bool()> m_pendingSafeStopPlatformRequest;
     QList<mixxx::removablemedia::RemovableMediaDevice> m_mediaDevices;
 
     std::unique_ptr<mixxx::removablemedia::IRemovableMediaService>

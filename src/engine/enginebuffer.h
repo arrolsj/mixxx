@@ -144,6 +144,7 @@ class EngineBuffer : public EngineObject {
     bool isTrackLoaded() const;
     TrackPointer getLoadedTrack() const;
     void ejectTrack();
+    bool isTrackReaderIdle() const;
 
     mixxx::audio::FramePos getExactPlayPos() const;
     double getVisualPlayPos() const;
