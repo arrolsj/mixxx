@@ -49,10 +49,20 @@ constexpr unsigned int kSleepSecondsAfterClosingDevice = 5;
 QString hardwareSignature(QString name) {
     name.replace('_', ' ');
     name = name.toUpper();
-    name.remove(QRegularExpression(
-            QStringLiteral("\\b(PIONEER|DJ|ASIO|WASAPI|DIRECTSOUND)\\b")));
+    name.remove(QRegularExpression(QStringLiteral(
+            "\\b(PIONEER|DJ|MIDI|USB|AUDIO|ASIO|WASAPI|"
+            "DIRECTSOUND)\\b")));
     name.remove(QRegularExpression(QStringLiteral("[^A-Z0-9]")));
     return name;
+}
+
+QString portAudioConfigDeviceName(const char* rawDeviceName) {
+    const QString deviceName = QString::fromUtf8(rawDeviceName);
+    static const QRegularExpression kAlsaHwDeviceSuffix(
+            QStringLiteral("^(.*) \\((?:plug)?hw:[0-9]+(?:,[0-9]+)?\\)$"));
+    const QRegularExpressionMatch match =
+            kAlsaHwDeviceSuffix.match(deviceName);
+    return match.hasMatch() ? match.captured(1) : deviceName;
 }
 
 bool controllerMatchesConfiguredAudio(
@@ -89,7 +99,8 @@ bool portAudioContainsAllDeviceNames(const QStringList& configuredDeviceNames) {
             ++deviceIndex) {
         const PaDeviceInfo* pDeviceInfo = Pa_GetDeviceInfo(deviceIndex);
         if (pDeviceInfo) {
-            missingDeviceNames.remove(QString::fromUtf8(pDeviceInfo->name));
+            missingDeviceNames.remove(
+                    portAudioConfigDeviceName(pDeviceInfo->name));
         }
     }
 
