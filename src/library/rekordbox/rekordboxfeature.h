@@ -31,6 +31,7 @@
 #include <QStringListModel>
 #include <QtConcurrentRun>
 #include <fstream>
+#include <functional>
 
 #include "library/baseexternallibraryfeature.h"
 #include "library/baseexternalplaylistmodel.h"
@@ -98,7 +99,10 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     QString deviceScanState() const;
     void scanDevices();
     QList<mixxx::removablemedia::RemovableMediaDevice> mediaDevices() const;
-    bool requestSafeStop(const QString& deviceId, quint64 expectedGeneration);
+    bool requestSafeStop(
+            const QString& deviceId,
+            quint64 expectedGeneration,
+            const std::function<void()>& releaseMediaReferences = {});
     bool isSafeStopActiveFor(const QString& deviceId) const;
     void rejectSafeStop(const QString& deviceId, const QString& busyReason);
     bool isLocationLoadAllowed(const QString& location) const;

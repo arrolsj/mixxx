@@ -892,13 +892,17 @@ bool Library::requestRemovableMediaSafeStop(
     if (m_pPlayerManager) {
         // PlayerInfo is updated after EngineBuffer finishes a LOAD. Consult
         // each player's current TrackPointer as well so an in-flight LOAD is
-        // already a busy reference before STOP can enter quiescing.
+        // already a reference before STOP can enter quiescing. Remove stale
+        // PlayerInfo entries for players that are already empty so an
+        // automatic eject never triggers the user-facing un-eject behavior.
         const QStringList playerGroups =
                 m_pPlayerManager->getVisualPlayerGroups();
         for (const QString& group : playerGroups) {
             BaseTrackPlayer* pPlayer = m_pPlayerManager->getPlayer(group);
             if (pPlayer && pPlayer->getLoadedTrack()) {
                 loadedTracks.insert(group, pPlayer->getLoadedTrack());
+            } else {
+                loadedTracks.remove(group);
             }
         }
     }
@@ -923,10 +927,16 @@ bool Library::requestRemovableMediaSafeStop(
             loadedGroups.append(it.key());
         }
     }
-    if (!loadedGroups.isEmpty()) {
+    QStringList unreleasableGroups;
+    for (const QString& group : std::as_const(loadedGroups)) {
+        if (!m_pPlayerManager || !m_pPlayerManager->getPlayer(group)) {
+            unreleasableGroups.append(group);
+        }
+    }
+    if (!unreleasableGroups.isEmpty()) {
         m_pRekordboxFeature->rejectSafeStop(deviceId,
-                tr("Tracks from this device are still loaded in: %1")
-                        .arg(loadedGroups.join(QStringLiteral(", "))));
+                tr("Tracks from this device could not be cleared from: %1")
+                        .arg(unreleasableGroups.join(QStringLiteral(", "))));
         return false;
     }
     if (m_analysisActive || m_playerAnalyzerActive) {
@@ -935,5 +945,18 @@ bool Library::requestRemovableMediaSafeStop(
         return false;
     }
     return m_pRekordboxFeature->requestSafeStop(
-            deviceId, expectedGeneration);
+            deviceId,
+            expectedGeneration,
+            [pPlayerManager = m_pPlayerManager, loadedGroups] {
+                if (!pPlayerManager) {
+                    return;
+                }
+                for (const QString& group : loadedGroups) {
+                    BaseTrackPlayer* pPlayer =
+                            pPlayerManager->getPlayer(group);
+                    if (pPlayer && pPlayer->getLoadedTrack()) {
+                        pPlayer->stopAndEjectTrack();
+                    }
+                }
+            });
 }

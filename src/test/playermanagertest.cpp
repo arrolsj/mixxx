@@ -3,6 +3,7 @@
 #include <QTest>
 
 #include "control/controlindicatortimer.h"
+#include "control/controlobject.h"
 #include "database/mixxxdb.h"
 #include "effects/effectsmanager.h"
 #include "engine/channels/enginedeck.h"
@@ -161,6 +162,37 @@ TEST_F(PlayerManagerTest, UnEjectTest) {
     deck2->slotEjectTrack(2.0);
     ASSERT_NE(nullptr, deck2->getLoadedTrack());
     ASSERT_EQ(testId1, deck2->getLoadedTrack()->getId());
+}
+
+TEST_F(PlayerManagerTest, StopAndEjectTrackClearsPausedAndPlayingDeck) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    const ConfigKey playKey(deck1->getGroup(), QStringLiteral("play"));
+
+    TrackPointer pTrack1 =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack1);
+    deck1->slotLoadTrack(pTrack1, false);
+    m_pEngine->process(1024);
+    waitForTrackToBeLoaded(deck1);
+    ASSERT_FALSE(ControlObject::toBool(playKey));
+
+    deck1->stopAndEjectTrack();
+    EXPECT_EQ(nullptr, deck1->getLoadedTrack());
+    EXPECT_FALSE(deck1->getEngineDeck()->getEngineBuffer()->isTrackLoaded());
+    EXPECT_FALSE(ControlObject::toBool(playKey));
+
+    TrackPointer pTrack2 =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest2));
+    ASSERT_NE(nullptr, pTrack2);
+    deck1->slotLoadTrack(pTrack2, true);
+    m_pEngine->process(1024);
+    waitForTrackToBeLoaded(deck1);
+    ASSERT_TRUE(ControlObject::toBool(playKey));
+
+    deck1->stopAndEjectTrack();
+    EXPECT_EQ(nullptr, deck1->getLoadedTrack());
+    EXPECT_FALSE(deck1->getEngineDeck()->getEngineBuffer()->isTrackLoaded());
+    EXPECT_FALSE(ControlObject::toBool(playKey));
 }
 
 // Loading a new track in a deck causes the old one to be ejected.

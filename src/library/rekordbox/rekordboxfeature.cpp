@@ -1871,7 +1871,8 @@ bool RekordboxFeature::isSafeStopActiveFor(
 
 bool RekordboxFeature::requestSafeStop(
         const QString& deviceId,
-        quint64 expectedGeneration) {
+        quint64 expectedGeneration,
+        const std::function<void()>& releaseMediaReferences) {
     if (!m_safeStopOperationDeviceId.isEmpty()) {
         if (deviceId == m_safeStopOperationDeviceId) {
             // The public API has no operation token. Treat a repeated request
@@ -1951,6 +1952,13 @@ bool RekordboxFeature::requestSafeStop(
             device.errorMessage.clear();
             device.busyReason.clear();
         }
+    }
+    // The LOAD gates above must be held before releasing players, while the
+    // platform request must not start until all Mixxx file handles have been
+    // closed. The Library supplies this callback to stop and eject only
+    // players that reference the selected physical removal group.
+    if (releaseMediaReferences) {
+        releaseMediaReferences();
     }
     emit devicesChanged();
     return m_pRemovableMediaService->requestSafeStop(

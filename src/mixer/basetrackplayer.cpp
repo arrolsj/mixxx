@@ -405,6 +405,16 @@ void BaseTrackPlayerImpl::slotEjectTrack(double v) {
     m_pChannel->getEngineBuffer()->ejectTrack();
 }
 
+void BaseTrackPlayerImpl::stopAndEjectTrack() {
+    if (!m_pLoadedTrack) {
+        return;
+    }
+    // EngineBuffer::ejectTrack() also stops playback and synchronously closes
+    // the reader before publishing the player-empty notification. Bypass the
+    // manual eject control restrictions for playing and double-clicking.
+    m_pChannel->getEngineBuffer()->ejectTrack();
+}
+
 TrackPointer BaseTrackPlayerImpl::unloadTrack() {
     if (!m_pLoadedTrack) {
         // nothing to do
