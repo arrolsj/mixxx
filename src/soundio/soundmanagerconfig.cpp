@@ -55,6 +55,14 @@ SoundManagerConfig::SoundManagerConfig(SoundManager* pSoundManager)
  * @returns false if the file can't be read or is invalid XML, true otherwise
  */
 bool SoundManagerConfig::readFromDisk() {
+    return readFromDiskImpl(false);
+}
+
+bool SoundManagerConfig::readFromDiskIncludingUnavailableDevices() {
+    return readFromDiskImpl(true);
+}
+
+bool SoundManagerConfig::readFromDiskImpl(bool includeUnavailableDevices) {
     QFile file(m_configFile.absoluteFilePath());
     QDomDocument doc;
     QDomElement rootElement;
@@ -122,7 +130,9 @@ bool SoundManagerConfig::readFromDisk() {
         QDomNodeList inElements(devElement.elementsByTagName(xmlElementInput));
 
         if (devicesMatchingByName == 0) {
-            continue;
+            if (!includeUnavailableDevices) {
+                continue;
+            }
         } else if (devicesMatchingByName == 1) {
             // There is only one device with this name, so it is unambiguous
             // which it is. Neither the alsaHwDevice nor portAudioIndex are

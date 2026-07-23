@@ -655,10 +655,19 @@ SoundDeviceStatus SoundManager::setConfig(const SoundManagerConfig& config) {
 void SoundManager::scheduleAudioRecoveryForController(
         const QString& controllerName) {
     if (!controllerMatchesConfiguredAudio(m_config, controllerName)) {
-        qDebug() << "Ignoring audio recovery for unrelated controller:"
-                 << controllerName;
-        emit controllerAudioRecoveryFinished(controllerName, false);
-        return;
+        SoundManagerConfig persistedConfig(this);
+        if (!persistedConfig.readFromDiskIncludingUnavailableDevices() ||
+                !controllerMatchesConfiguredAudio(
+                        persistedConfig, controllerName)) {
+            qDebug() << "Ignoring audio recovery for unrelated controller:"
+                     << controllerName;
+            emit controllerAudioRecoveryFinished(controllerName, false);
+            return;
+        }
+        qInfo() << "Restoring persisted audio configuration for unavailable "
+                   "controller:"
+                << controllerName;
+        m_config = persistedConfig;
     }
 
     m_audioRecoveryControllerName = controllerName;
@@ -698,6 +707,14 @@ void SoundManager::slotAttemptAudioRecovery() {
     const bool sleepAfterClosing = false;
     clearDeviceList(sleepAfterClosing);
     queryDevices();
+    SoundManagerConfig persistedConfig(this);
+    if (persistedConfig.readFromDisk() &&
+            controllerMatchesConfiguredAudio(
+                    persistedConfig, m_audioRecoveryControllerName)) {
+        // Refresh ALSA and PortAudio identifiers, which may change while the
+        // controller is unplugged, before comparing and opening devices.
+        m_config = persistedConfig;
+    }
     QSet<SoundDeviceId> unavailableDevices = m_config.getDevices();
     for (const auto& pDevice : std::as_const(m_devices)) {
         unavailableDevices.remove(pDevice->getDeviceId());
