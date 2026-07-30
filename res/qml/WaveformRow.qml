@@ -151,14 +151,103 @@ Item {
             visible: root.deckPlayer.isLoaded
             z: 0
 
+            // A Repeater over the complete beats model creates hundreds or
+            // thousands of Shape items synchronously whenever a track is
+            // loaded. Both decks share the same Qt Quick scene, so that model
+            // reset can stall the waveform of a deck that is already playing.
+            //
+            // Keep only the beats around the current viewport instantiated.
+            // At very wide zoom levels, sample bar-aligned beats so the item
+            // count remains bounded and the grid stays legible.
+            readonly property var beatsModel: root.deckPlayer.beatsModel
+            property int beatsModelRevision: 0
+            readonly property int sourceBeatCount: {
+                beatsModelRevision;
+                return beatsModel ? beatsModel.rowCount() : 0;
+            }
+            readonly property int viewportOverscanBeats: 4
+            readonly property int maximumRenderedBeatLines: 192
+            readonly property real firstVisibleFrame: {
+                if (samplesControl.value <= 0 || width <= 0)
+                    return 0;
+                return Math.max(0, -x / width * samplesControl.value / 2);
+            }
+            readonly property real lastVisibleFrame: {
+                if (samplesControl.value <= 0 || width <= 0)
+                    return 0;
+                return Math.min(samplesControl.value / 2,
+                        (root.width - x) / width * samplesControl.value / 2);
+            }
+            readonly property int firstVisibleBeatIndex: Math.max(0,
+                    lowerBoundBeat(firstVisibleFrame) - viewportOverscanBeats)
+            readonly property int onePastLastVisibleBeatIndex: Math.min(
+                    sourceBeatCount,
+                    lowerBoundBeat(lastVisibleFrame) + viewportOverscanBeats)
+            readonly property int visibleSourceBeatCount: Math.max(0,
+                    onePastLastVisibleBeatIndex - firstVisibleBeatIndex)
+            readonly property int beatStride: visibleSourceBeatCount
+                    <= maximumRenderedBeatLines ? 1
+                    : 4 * Math.ceil(visibleSourceBeatCount
+                            / (4 * maximumRenderedBeatLines))
+            readonly property int firstRenderedBeatIndex:
+                    alignFirstRenderedBeat(firstVisibleBeatIndex, beatStride)
+            readonly property int renderedBeatCount: firstRenderedBeatIndex
+                    >= onePastLastVisibleBeatIndex ? 0
+                    : Math.ceil((onePastLastVisibleBeatIndex
+                            - firstRenderedBeatIndex) / beatStride)
+
+            function lowerBoundBeat(targetFrame) {
+                let low = 0;
+                let high = sourceBeatCount;
+                while (low < high) {
+                    const middle = Math.floor((low + high) / 2);
+                    const frame = Number(beatsModel.get(middle).framePosition);
+                    if (frame < targetFrame)
+                        low = middle + 1;
+                    else
+                        high = middle;
+                }
+                return low;
+            }
+
+            function alignFirstRenderedBeat(firstIndex, stride) {
+                if (!beatsModel || stride === 1)
+                    return firstIndex;
+                const limit = Math.min(sourceBeatCount, firstIndex + 4);
+                for (let index = firstIndex; index < limit; ++index) {
+                    if (Number(beatsModel.get(index).beatNumber) === 1)
+                        return index;
+                }
+                return firstIndex;
+            }
+
+            Connections {
+                target: beatGrid.beatsModel
+
+                function onModelReset() {
+                    ++beatGrid.beatsModelRevision;
+                }
+            }
+
             Repeater {
-                model: root.deckPlayer.beatsModel
+                model: beatGrid.renderedBeatCount
 
                 Shape {
                     id: beatLine
 
-                    required property real framePosition
-                    required property int beatNumber
+                    readonly property int sourceBeatIndex:
+                            beatGrid.firstRenderedBeatIndex
+                            + index * beatGrid.beatStride
+                    readonly property var sourceBeat: {
+                        beatGrid.beatsModelRevision;
+                        return beatGrid.beatsModel
+                                ? beatGrid.beatsModel.get(sourceBeatIndex)
+                                : null;
+                    }
+                    readonly property real framePosition: sourceBeat
+                            ? Number(sourceBeat.framePosition) : 0
+                    readonly property int beatNumber: sourceBeat
+                            ? Number(sourceBeat.beatNumber) : 0
                     readonly property bool isDownbeat: beatNumber === 1
 
                     property real physicalPixel: 2 / Screen.devicePixelRatio
