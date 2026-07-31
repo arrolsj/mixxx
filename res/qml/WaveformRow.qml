@@ -64,34 +64,6 @@ Item {
         }
 
         Mixxx.ControlProxy {
-            id: introStartPosition
-
-            group: root.group
-            key: "intro_start_position"
-        }
-
-        Mixxx.ControlProxy {
-            id: introEndPosition
-
-            group: root.group
-            key: "intro_end_position"
-        }
-
-        Mixxx.ControlProxy {
-            id: outroStartPosition
-
-            group: root.group
-            key: "outro_start_position"
-        }
-
-        Mixxx.ControlProxy {
-            id: outroEndPosition
-
-            group: root.group
-            key: "outro_end_position"
-        }
-
-        Mixxx.ControlProxy {
             id: loopStartPosition
 
             group: root.group
@@ -156,9 +128,13 @@ Item {
             // loaded. Both decks share the same Qt Quick scene, so that model
             // reset can stall the waveform of a deck that is already playing.
             //
-            // Keep only the beats around the current viewport instantiated.
-            // At very wide zoom levels, sample bar-aligned beats so the item
-            // count remains bounded and the grid stays legible.
+            // Keep a fixed pool for the beats around the current viewport.
+            // Changing a Repeater's numeric model destroys or creates Shape
+            // delegates synchronously, which stalls both decks when zoom
+            // changes. A fixed pool pays that cost once when the scene is
+            // built; loading and zooming only update bounded delegate data.
+            // At very wide zoom levels, sample bar-aligned beats so the grid
+            // stays legible.
             readonly property var beatsModel: root.deckPlayer.beatsModel
             property int beatsModelRevision: 0
             readonly property int sourceBeatCount: {
@@ -230,17 +206,22 @@ Item {
             }
 
             Repeater {
-                model: beatGrid.renderedBeatCount
+                model: beatGrid.maximumRenderedBeatLines
 
                 Shape {
                     id: beatLine
 
+                    required property int index
+                    readonly property bool hasSourceBeat:
+                            index < beatGrid.renderedBeatCount
                     readonly property int sourceBeatIndex:
-                            beatGrid.firstRenderedBeatIndex
-                            + index * beatGrid.beatStride
+                            hasSourceBeat
+                            ? beatGrid.firstRenderedBeatIndex
+                                    + index * beatGrid.beatStride
+                            : -1
                     readonly property var sourceBeat: {
                         beatGrid.beatsModelRevision;
-                        return beatGrid.beatsModel
+                        return hasSourceBeat && beatGrid.beatsModel
                                 ? beatGrid.beatsModel.get(sourceBeatIndex)
                                 : null;
                     }
@@ -255,6 +236,7 @@ Item {
 
                     width: physicalPixel
                     height: beatGrid.height
+                    visible: sourceBeat !== null
                     opacity: beatLine.isDownbeat ? 0.9 : 0.65
                     // Snap the final global position, including contentX, so
                     // dashed lines stay crisp while sharing the waveform's
@@ -308,27 +290,6 @@ Item {
             x: viewportWaveform.contentX
             visible: root.deckPlayer.isLoaded
             z: 2
-
-            Skin.WaveformIntroOutro {
-                id: intro
-
-                visible: introStartPosition.value != -1 || introEndPosition.value != -1
-
-                height: waveform.height
-                x: ((introStartPosition.value != -1 ? introStartPosition.value : introEndPosition.value) / samplesControl.value) * waveform.width
-                width: introEndPosition.value == -1 ? 0 : ((introEndPosition.value - introStartPosition.value) / samplesControl.value) * waveform.width
-            }
-
-            Skin.WaveformIntroOutro {
-                id: outro
-
-                visible: outroStartPosition.value != -1 || outroEndPosition.value != -1
-                isIntro: false
-
-                height: waveform.height
-                x: ((outroStartPosition.value != -1 ? outroStartPosition.value : outroEndPosition.value) / samplesControl.value) * waveform.width
-                width: outroEndPosition.value == -1 || outroStartPosition.value == -1 ? 0 : ((outroEndPosition.value - outroStartPosition.value) / samplesControl.value) * waveform.width
-            }
 
             Skin.WaveformLoop {
                 id: loop
