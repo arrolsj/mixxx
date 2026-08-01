@@ -98,7 +98,10 @@ void CachingReaderWorker::newTrack(TrackPointer pTrack) {
         m_pNewTrack = pTrack;
         m_newTrackAvailable.storeRelease(1);
     }
-    workReady();
+    // Track changes must also work without an active audio callback. Chunk
+    // reads are scheduled by the engine after its callback, but loadTrack()
+    // synchronously pauses the EngineBuffer before replacing the source.
+    m_semaRun.release();
 }
 
 void CachingReaderWorker::run() {

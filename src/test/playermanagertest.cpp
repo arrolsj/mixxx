@@ -191,6 +191,22 @@ class PlayerManagerSafeStopTest : public PlayerManagerTest {
     QByteArray m_previousRoots;
 };
 
+TEST_F(PlayerManagerTest, TrackLoadsWithoutEngineCallback) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    TrackPointer pTrack =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack);
+
+    deck1->slotLoadTrack(pTrack, false);
+
+    // A missing audio device means EngineMixer::process() is not called. The
+    // track-loading worker must still run so the UI receives confirmation.
+    QTRY_VERIFY_WITH_TIMEOUT(
+            deck1->getEngineDeck()->getEngineBuffer()->isTrackLoaded(),
+            5000);
+    EXPECT_EQ(pTrack, deck1->getLoadedTrack());
+}
+
 TEST_F(PlayerManagerTest, UnEjectTest) {
     // Ejecting an empty deck with no previously-recorded ejected track has no effect.
     auto deck1 = m_pPlayerManager->getDeck(0);
