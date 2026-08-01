@@ -114,154 +114,8 @@ Item {
         // exactly one column per physical viewport pixel. Each column is a
         // range maximum on a track-global pixel grid, matching the stable
         // QWidget RGB renderer without creating an unbounded item or texture.
-        Item {
-            id: beatGrid
-
-            width: viewportWaveform.trackWidth
-            height: parent.height
-            x: viewportWaveform.contentX
-            visible: root.deckPlayer.isLoaded
-            z: 0
-
-            // A Repeater over the complete beats model creates hundreds or
-            // thousands of Shape items synchronously whenever a track is
-            // loaded. Both decks share the same Qt Quick scene, so that model
-            // reset can stall the waveform of a deck that is already playing.
-            //
-            // Keep a fixed pool for the beats around the current viewport.
-            // Changing a Repeater's numeric model destroys or creates Shape
-            // delegates synchronously, which stalls both decks when zoom
-            // changes. A fixed pool pays that cost once when the scene is
-            // built; loading and zooming only update bounded delegate data.
-            // At very wide zoom levels, sample bar-aligned beats so the grid
-            // stays legible.
-            readonly property var beatsModel: root.deckPlayer.beatsModel
-            property int beatsModelRevision: 0
-            readonly property int sourceBeatCount: {
-                beatsModelRevision;
-                return beatsModel ? beatsModel.rowCount() : 0;
-            }
-            readonly property int viewportOverscanBeats: 4
-            readonly property int maximumRenderedBeatLines: 192
-            readonly property real firstVisibleFrame: {
-                if (samplesControl.value <= 0 || width <= 0)
-                    return 0;
-                return Math.max(0, -x / width * samplesControl.value / 2);
-            }
-            readonly property real lastVisibleFrame: {
-                if (samplesControl.value <= 0 || width <= 0)
-                    return 0;
-                return Math.min(samplesControl.value / 2,
-                        (root.width - x) / width * samplesControl.value / 2);
-            }
-            readonly property int firstVisibleBeatIndex: Math.max(0,
-                    lowerBoundBeat(firstVisibleFrame) - viewportOverscanBeats)
-            readonly property int onePastLastVisibleBeatIndex: Math.min(
-                    sourceBeatCount,
-                    lowerBoundBeat(lastVisibleFrame) + viewportOverscanBeats)
-            readonly property int visibleSourceBeatCount: Math.max(0,
-                    onePastLastVisibleBeatIndex - firstVisibleBeatIndex)
-            readonly property int beatStride: visibleSourceBeatCount
-                    <= maximumRenderedBeatLines ? 1
-                    : 4 * Math.ceil(visibleSourceBeatCount
-                            / (4 * maximumRenderedBeatLines))
-            readonly property int firstRenderedBeatIndex:
-                    alignFirstRenderedBeat(firstVisibleBeatIndex, beatStride)
-            readonly property int renderedBeatCount: firstRenderedBeatIndex
-                    >= onePastLastVisibleBeatIndex ? 0
-                    : Math.ceil((onePastLastVisibleBeatIndex
-                            - firstRenderedBeatIndex) / beatStride)
-
-            function lowerBoundBeat(targetFrame) {
-                let low = 0;
-                let high = sourceBeatCount;
-                while (low < high) {
-                    const middle = Math.floor((low + high) / 2);
-                    const frame = Number(beatsModel.get(middle).framePosition);
-                    if (frame < targetFrame)
-                        low = middle + 1;
-                    else
-                        high = middle;
-                }
-                return low;
-            }
-
-            function alignFirstRenderedBeat(firstIndex, stride) {
-                if (!beatsModel || stride === 1)
-                    return firstIndex;
-                const limit = Math.min(sourceBeatCount, firstIndex + 4);
-                for (let index = firstIndex; index < limit; ++index) {
-                    if (Number(beatsModel.get(index).beatNumber) === 1)
-                        return index;
-                }
-                return firstIndex;
-            }
-
-            Connections {
-                target: beatGrid.beatsModel
-
-                function onModelReset() {
-                    ++beatGrid.beatsModelRevision;
-                }
-            }
-
-            Repeater {
-                model: beatGrid.maximumRenderedBeatLines
-
-                Shape {
-                    id: beatLine
-
-                    required property int index
-                    readonly property bool hasSourceBeat:
-                            index < beatGrid.renderedBeatCount
-                    readonly property int sourceBeatIndex:
-                            hasSourceBeat
-                            ? beatGrid.firstRenderedBeatIndex
-                                    + index * beatGrid.beatStride
-                            : -1
-                    readonly property var sourceBeat: {
-                        beatGrid.beatsModelRevision;
-                        return hasSourceBeat && beatGrid.beatsModel
-                                ? beatGrid.beatsModel.get(sourceBeatIndex)
-                                : null;
-                    }
-                    readonly property real framePosition: sourceBeat
-                            ? Number(sourceBeat.framePosition) : 0
-                    readonly property int beatNumber: sourceBeat
-                            ? Number(sourceBeat.beatNumber) : 0
-                    readonly property bool isDownbeat: beatNumber === 1
-
-                    property real physicalPixel: 2 / Screen.devicePixelRatio
-                    property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * beatGrid.width
-
-                    width: physicalPixel
-                    height: beatGrid.height
-                    visible: sourceBeat !== null
-                    opacity: beatLine.isDownbeat ? 0.9 : 0.65
-                    // Snap the final global position, including contentX, so
-                    // dashed lines stay crisp while sharing the waveform's
-                    // viewport-driven track coordinate transform.
-                    x: Math.round((beatGrid.x + trackX) * Screen.devicePixelRatio) /
-                            Screen.devicePixelRatio - beatGrid.x - width / 2
-
-                    ShapePath {
-                        strokeColor: beatLine.isDownbeat ? Theme.waveformDownbeatColor : Theme.waveformBeatColor
-                        strokeWidth: beatLine.physicalPixel
-                        strokeStyle: ShapePath.DashLine
-                        dashPattern: beatLine.isDownbeat ? [4, 3] : [3, 3]
-                        fillColor: "transparent"
-                        startX: beatLine.width / 2
-                        startY: 0
-
-                        PathLine {
-                            x: beatLine.width / 2
-                            y: beatLine.height
-                        }
-                    }
-                }
-            }
-        }
-
+        // The beat grid is batched into the same bounded QSG geometry so zoom
+        // never fans out across independent QML Shape delegates.
         Mixxx.ViewportWaveform {
             id: viewportWaveform
 
@@ -275,6 +129,9 @@ Item {
             highColor: "#0000FF"
             midColor: "#00FF00"
             lowColor: "#FF0000"
+            beatGridVisible: true
+            beatColor: Theme.waveformBeatColor
+            downbeatColor: Theme.waveformDownbeatColor
             visible: root.deckPlayer.isLoaded
             z: 1
         }

@@ -2239,6 +2239,7 @@ if(BUILD_TESTING)
     src/test/trackreftest.cpp
     src/test/trackupdate_test.cpp
     src/test/visualplayposition_test.cpp
+    src/test/waveformbeatgridsampler_test.cpp
     src/test/waveformrgbcolumnsampler_test.cpp
     src/test/uuid_test.cpp
     src/test/wbatterytest.cpp
