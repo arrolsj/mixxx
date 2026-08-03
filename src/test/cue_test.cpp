@@ -203,4 +203,61 @@ TEST(CueTest, QmlPlayerProxyRefreshesSeparateMemoryCueModelOnTrackLoad) {
                     .toInt());
     EXPECT_EQ(2, pHotcuesModel->rowCount({}));
 }
+
+TEST(CueTest, RekordboxCueSessionPreservesPersistentCuesAndFiltersQmlModels) {
+    FakeQmlTrackPlayer trackPlayer;
+    qml::QmlPlayerProxy playerProxy(&trackPlayer);
+    TrackPointer pTrack = Track::newTemporary();
+
+    constexpr audio::FramePos seratoHotcuePosition(1000);
+    constexpr audio::FramePos rekordboxHotcuePosition(2000);
+    constexpr audio::FramePos rekordboxMemoryCuePosition(3000);
+    const CuePointer pSeratoHotcue = pTrack->createAndAddCue(
+            CueType::HotCue,
+            0,
+            seratoHotcuePosition,
+            audio::kInvalidFramePos,
+            RgbColor(0x112233));
+
+    pTrack->beginRekordboxCueSession();
+    const CuePointer pRekordboxHotcue = pTrack->createAndAddCue(
+            CueType::HotCue,
+            0,
+            rekordboxHotcuePosition,
+            audio::kInvalidFramePos,
+            RgbColor(0x445566));
+    pTrack->createAndAddCue(CueType::MemoryCue,
+            Cue::kNoHotCue,
+            rekordboxMemoryCuePosition,
+            audio::kInvalidFramePos,
+            RgbColor(0xF87090));
+
+    const auto persistentCues = pTrack->getCuePoints();
+    ASSERT_EQ(1, persistentCues.size());
+    EXPECT_EQ(pSeratoHotcue, persistentCues.first());
+
+    const auto playbackCues = pTrack->getCuePointsForPlayback();
+    ASSERT_EQ(2, playbackCues.size());
+    EXPECT_TRUE(playbackCues.contains(pRekordboxHotcue));
+    EXPECT_FALSE(playbackCues.contains(pSeratoHotcue));
+
+    trackPlayer.slotLoadTrack(pTrack, false);
+
+    auto* pHotcuesModel = cueModelProperty(&playerProxy, "hotcuesModel");
+    auto* pMemoryCuesModel = cueModelProperty(&playerProxy, "memoryCuesModel");
+    ASSERT_NE(nullptr, pHotcuesModel);
+    ASSERT_NE(nullptr, pMemoryCuesModel);
+    ASSERT_EQ(1, pHotcuesModel->rowCount({}));
+    EXPECT_EQ(rekordboxHotcuePosition.value(),
+            pHotcuesModel
+                    ->data(pHotcuesModel->index(0, 0),
+                            qml::QmlCuesModel::StartPositionRole)
+                    .toLongLong());
+    ASSERT_EQ(1, pMemoryCuesModel->rowCount({}));
+    EXPECT_EQ(rekordboxMemoryCuePosition.value(),
+            pMemoryCuesModel
+                    ->data(pMemoryCuesModel->index(0, 0),
+                            qml::QmlCuesModel::StartPositionRole)
+                    .toLongLong());
+}
 } // namespace mixxx

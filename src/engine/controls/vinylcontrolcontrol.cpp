@@ -140,7 +140,7 @@ void VinylControlControl::slotControlVinylSeek(double fractionalPos) {
         mixxx::audio::FrameDiff_t shortestDistance = 0;
         mixxx::audio::FramePos nearestPlayPos;
 
-        const QList<CuePointer> cuePoints(pTrack->getCuePoints());
+        const QList<CuePointer> cuePoints(pTrack->getCuePointsForPlayback());
         QListIterator<CuePointer> it(cuePoints);
         while (it.hasNext()) {
             CuePointer pCue(it.next());

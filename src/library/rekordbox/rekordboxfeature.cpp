@@ -1088,7 +1088,7 @@ void setHotCue(TrackPointer track,
         const QString& label,
         mixxx::RgbColor::optional_t color) {
     CuePointer pCue;
-    const QList<CuePointer> cuePoints = track->getCuePoints();
+    const QList<CuePointer> cuePoints = track->getCuePointsForPlayback();
     for (const CuePointer& trackCue : cuePoints) {
         if (trackCue->getHotCue() == id) {
             pCue = trackCue;
@@ -1485,6 +1485,11 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
     if (!QFile(location).exists()) {
         return track;
     }
+
+    // Rekordbox cues are a transient playback session. Keep embedded Serato
+    // and native Mixxx cues in the Track's persistent cue list, but exclude
+    // them from playback controls and UI while this Rekordbox track is used.
+    track->beginRekordboxCueSession();
 
     // The following code accounts for timing offsets required to
     // correctly align timing information (cue points, loops, beatgrids)

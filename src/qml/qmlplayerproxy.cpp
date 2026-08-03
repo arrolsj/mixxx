@@ -269,7 +269,7 @@ void QmlPlayerProxy::slotHotcuesChanged() {
 
     const TrackPointer pTrack = m_pCurrentTrack;
     if (pTrack) {
-        const auto& cuePoints = pTrack->getCuePoints();
+        const auto cuePoints = pTrack->getCuePointsForPlayback();
         for (const auto& cuePoint : cuePoints) {
             if (cuePoint->getType() == mixxx::CueType::MemoryCue) {
                 memoryCues.append(cuePoint);

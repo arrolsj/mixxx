@@ -338,7 +338,7 @@ void WOverview::slotTrackLoaded(TrackPointer pTrack) {
     DEBUG_ASSERT(m_pCurrentTrack == pTrack);
     m_trackLoaded = true;
     if (m_pCurrentTrack) {
-        updateCues(m_pCurrentTrack->getCuePoints());
+        updateCues(m_pCurrentTrack->getCuePointsForPlayback());
     }
     update();
 }
@@ -396,7 +396,7 @@ void WOverview::onMarkChanged(double v) {
     Q_UNUSED(v);
     //qDebug() << "WOverview::onMarkChanged()" << v;
     if (m_pCurrentTrack) {
-        updateCues(m_pCurrentTrack->getCuePoints());
+        updateCues(m_pCurrentTrack->getCuePointsForPlayback());
         update();
     }
 }
@@ -610,7 +610,8 @@ void WOverview::mousePressEvent(QMouseEvent* e) {
             // WOverview in the future, another way to associate
             // WaveformMarks with Cues will need to be implemented.
             CuePointer pHoveredCue;
-            const QList<CuePointer> cueList = m_pCurrentTrack->getCuePoints();
+            const QList<CuePointer> cueList =
+                    m_pCurrentTrack->getCuePointsForPlayback();
             for (const auto& pCue : cueList) {
                 if (pCue->getHotCue() == m_pHoveredMark->getHotCue()) {
                     pHoveredCue = pCue;

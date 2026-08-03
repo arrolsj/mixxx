@@ -483,7 +483,8 @@ WaveformMarkPointer WaveformWidgetRenderer::getCueMarkAtPoint(QPoint point) cons
 
 CuePointer WaveformWidgetRenderer::getCuePointerFromIndex(int cueIndex) const {
     if (cueIndex != Cue::kNoHotCue && m_pTrack) {
-        const QList<CuePointer> cueList = m_pTrack->getCuePoints();
+        const QList<CuePointer> cueList =
+                m_pTrack->getCuePointsForPlayback();
         for (const auto& pCue : cueList) {
             if (pCue->getHotCue() == cueIndex) {
                 return pCue;

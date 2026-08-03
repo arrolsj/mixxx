@@ -333,7 +333,8 @@ void BaseTrackPlayerImpl::loadTrack(TrackPointer pTrack) {
         // For the volatile "most recent loop" the hotcue number will be -1.
         // If no such loop exists, restore a saved loop cue.
         CuePointer pLoopCue;
-        const QList<CuePointer> trackCues = m_pLoadedTrack->getCuePoints();
+        const QList<CuePointer> trackCues =
+                m_pLoadedTrack->getCuePointsForPlayback();
         for (const auto& pCue : trackCues) {
             if (pCue->getType() != mixxx::CueType::Loop) {
                 continue;
@@ -437,7 +438,8 @@ TrackPointer BaseTrackPlayerImpl::unloadTrack() {
             mixxx::audio::FramePos::fromEngineSamplePosMaybeInvalid(
                     m_pLoopOutPoint->get());
     CuePointer pLoopCue;
-    const QList<CuePointer> cuePoints = m_pLoadedTrack->getCuePoints();
+    const QList<CuePointer> cuePoints =
+            m_pLoadedTrack->getCuePointsForPlayback();
     for (const auto& pCue : cuePoints) {
         if (pCue->getType() == mixxx::CueType::Loop && pCue->getHotCue() == Cue::kNoHotCue) {
             pLoopCue = pCue;
