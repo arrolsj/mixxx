@@ -36,7 +36,9 @@ EngineBufferScaleST::EngineBufferScaleST(ReadAheadManager* pReadAheadManager)
     m_pSoundTouch->setChannels(getOutputSignal().getChannelCount());
     m_pSoundTouch->setRate(m_dBaseRate);
     m_pSoundTouch->setPitch(1.0);
-    m_pSoundTouch->setSetting(SETTING_USE_QUICKSEEK, 1);
+    // Prefer the exhaustive overlap search: quick seek can turn sharp
+    // transients into audible short repeats when keylock is enabled.
+    m_pSoundTouch->setSetting(SETTING_USE_QUICKSEEK, 0);
     // Initialize the internal buffers to prevent re-allocations
     // in the real-time thread.
     onSampleRateChanged();
