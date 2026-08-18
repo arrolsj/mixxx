@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "control/controlobject.h"
 #include "mixer/basetrackplayer.h"
 #include "moc_qmlviewportwaveform.cpp"
 
@@ -98,6 +99,8 @@ void QmlViewportWaveform::setPlayer(QmlPlayerProxy* pPlayer) {
             qWarning() << "QmlViewportWaveform received a stale player proxy";
         } else {
             setCurrentTrack(pTrackPlayer->getLoadedTrack());
+            refreshTrackEndPositionFromPlayer();
+            slotBeatsUpdated();
             connect(pTrackPlayer,
                     &BaseTrackPlayer::newTrackLoaded,
                     this,
@@ -276,6 +279,8 @@ double QmlViewportWaveform::contentX() const {
 
 void QmlViewportWaveform::slotTrackLoaded(TrackPointer pTrack) {
     setCurrentTrack(pTrack);
+    refreshTrackEndPositionFromPlayer();
+    slotBeatsUpdated();
 }
 
 void QmlViewportWaveform::slotTrackLoading(
@@ -289,25 +294,51 @@ void QmlViewportWaveform::slotTrackUnloaded() {
 }
 
 void QmlViewportWaveform::setCurrentTrack(TrackPointer pTrack) {
-    if (m_pCurrentTrack == pTrack) {
-        return;
+    if (m_pCurrentTrack != pTrack) {
+        if (m_pCurrentTrack != nullptr) {
+            disconnect(m_pCurrentTrack.get(), nullptr, this, nullptr);
+        }
+        m_pCurrentTrack = pTrack;
+        if (m_pCurrentTrack != nullptr) {
+            connect(m_pCurrentTrack.get(),
+                    &Track::waveformUpdated,
+                    this,
+                    &QmlViewportWaveform::slotWaveformUpdated);
+            connect(m_pCurrentTrack.get(),
+                    &Track::beatsUpdated,
+                    this,
+                    &QmlViewportWaveform::slotBeatsUpdated);
+        }
     }
-    if (m_pCurrentTrack != nullptr) {
-        disconnect(m_pCurrentTrack.get(), nullptr, this, nullptr);
-    }
-    m_pCurrentTrack = pTrack;
-    if (m_pCurrentTrack != nullptr) {
-        connect(m_pCurrentTrack.get(),
-                &Track::waveformUpdated,
-                this,
-                &QmlViewportWaveform::slotWaveformUpdated);
-        connect(m_pCurrentTrack.get(),
-                &Track::beatsUpdated,
-                this,
-                &QmlViewportWaveform::slotBeatsUpdated);
-    }
+    m_trackEndPosition = m_pCurrentTrack != nullptr
+            ? audio::FramePos{m_pCurrentTrack->getDuration() *
+                      m_pCurrentTrack->getSampleRate()}
+            : audio::kStartFramePos;
     slotWaveformUpdated();
     slotBeatsUpdated();
+}
+
+void QmlViewportWaveform::refreshTrackEndPositionFromPlayer() {
+    if (m_pCurrentTrack == nullptr || m_pPlayer == nullptr) {
+        return;
+    }
+    BaseTrackPlayer* pTrackPlayer = m_pPlayer->internalTrackPlayer();
+    if (pTrackPlayer == nullptr ||
+            pTrackPlayer->getLoadedTrack() != m_pCurrentTrack) {
+        return;
+    }
+
+    const ConfigKey trackSamplesKey(
+            pTrackPlayer->getGroup(), QStringLiteral("track_samples"));
+    if (!ControlObject::exists(trackSamplesKey)) {
+        return;
+    }
+    const auto exactTrackEnd = audio::FramePos::fromEngineSamplePosMaybeInvalid(
+            ControlObject::get(trackSamplesKey));
+    if (exactTrackEnd.isValid() &&
+            exactTrackEnd > audio::kStartFramePos) {
+        m_trackEndPosition = exactTrackEnd;
+    }
 }
 
 void QmlViewportWaveform::slotWaveformUpdated() {
@@ -320,8 +351,6 @@ void QmlViewportWaveform::slotWaveformUpdated() {
 
 void QmlViewportWaveform::slotBeatsUpdated() {
     if (m_pCurrentTrack != nullptr) {
-        m_trackEndPosition = audio::FramePos{
-                m_pCurrentTrack->getDuration() * m_pCurrentTrack->getSampleRate()};
         m_beatGridData = waveform::buildWaveformBeatGridData(
                 m_pCurrentTrack->getBeats(), m_trackEndPosition);
     } else {

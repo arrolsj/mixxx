@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "track/beats.h"
 #include "waveform/renderers/waveformbeatgridsampler.h"
@@ -88,6 +89,41 @@ TEST(WaveformBeatGridSamplerTest, ZoomOneThroughTenStaysBoundedAtEveryDpr) {
                     lines.begin(), lines.end(), [](const auto& line) {
                         return std::isfinite(line.x);
                     }));
+        }
+    }
+}
+
+TEST(WaveformBeatGridSamplerTest,
+        ExactDecodedLengthAlignsCueCentersAcrossZoomAndDpr) {
+    const auto pBeats = Beats::fromConstTempo(
+            kSampleRate, audio::kStartFramePos, Bpm(120.0));
+    const auto exactTrackEnd = audio::FramePos(300 * kSampleRate + 1234);
+    const auto cuePosition = audio::FramePos(280 * kSampleRate);
+    const auto beatGridData = buildWaveformBeatGridData(pBeats, exactTrackEnd);
+    const double displayPosition = cuePosition.value() / exactTrackEnd.value();
+
+    for (int zoom = 1; zoom <= 10; ++zoom) {
+        for (const double dpr : std::array<double, 2>{1.0, 2.0}) {
+            SCOPED_TRACE(testing::Message()
+                    << "zoom=" << zoom << " dpr=" << dpr);
+            const auto viewport = calculateWaveformRgbViewportMetrics(
+                    600000, 800.0, dpr, displayPosition, 0.5, zoom);
+            const auto lines = sampleWaveformBeatGridLines(
+                    beatGridData, exactTrackEnd, viewport, dpr);
+            ASSERT_FALSE(lines.empty());
+
+            const double cueCenter = viewport.contentX +
+                    cuePosition.value() / exactTrackEnd.value() *
+                            viewport.trackWidth;
+            const auto closestLine = std::min_element(lines.begin(),
+                    lines.end(),
+                    [cueCenter](const auto& left, const auto& right) {
+                        return std::abs(left.x - cueCenter) <
+                                std::abs(right.x - cueCenter);
+                    });
+            ASSERT_NE(lines.end(), closestLine);
+            EXPECT_LE(std::abs(closestLine->x - cueCenter),
+                    0.5 / dpr + 0.0001);
         }
     }
 }

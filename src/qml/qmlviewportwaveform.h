@@ -102,6 +102,7 @@ class QmlViewportWaveform : public QQuickItem {
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
+    void refreshTrackEndPositionFromPlayer();
     bool updateViewportMetrics();
 
     QPointer<QmlPlayerProxy> m_pPlayer;
