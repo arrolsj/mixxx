@@ -243,6 +243,19 @@ void QmlViewportWaveform::setBeatGridVisible(bool visible) {
     update();
 }
 
+bool QmlViewportWaveform::beatGridDownbeatsOnly() const {
+    return m_beatGridDownbeatsOnly;
+}
+
+void QmlViewportWaveform::setBeatGridDownbeatsOnly(bool downbeatsOnly) {
+    if (m_beatGridDownbeatsOnly == downbeatsOnly) {
+        return;
+    }
+    m_beatGridDownbeatsOnly = downbeatsOnly;
+    emit beatGridDownbeatsOnlyChanged();
+    update();
+}
+
 QColor QmlViewportWaveform::beatColor() const {
     return m_beatColor;
 }
@@ -448,7 +461,8 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
             ? waveform::sampleWaveformBeatGridLines(m_beatGridData,
                       m_trackEndPosition,
                       viewport,
-                      m_devicePixelRatio)
+                      m_devicePixelRatio,
+                      m_beatGridDownbeatsOnly)
             : std::vector<waveform::WaveformBeatGridLine>{};
     const std::size_t beatGridRectangleCount =
             waveform::waveformBeatGridDashCount(

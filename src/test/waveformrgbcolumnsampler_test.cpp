@@ -193,6 +193,23 @@ TEST(WaveformRgbColumnSamplerTest, OutputIsBoundedByPhysicalViewport) {
     EXPECT_EQ(static_cast<std::size_t>(metrics.physicalWidth), columns.size());
 }
 
+TEST(WaveformRgbColumnSamplerTest,
+        FiveLevelSamplerZoomHalvesTrackWidthAtEveryStep) {
+    constexpr int kVisualFrames = 32000;
+    constexpr double kLogicalWidth = 800.0;
+
+    double previousTrackWidth = 0.0;
+    for (const double zoom : std::array<double, 5>{2.0, 4.0, 8.0, 16.0, 32.0}) {
+        const auto metrics = calculateWaveformRgbViewportMetrics(
+                kVisualFrames * 2, kLogicalWidth, 1.0, 0.5, 0.5, zoom);
+        ASSERT_TRUE(metrics.isValid());
+        if (previousTrackWidth > 0.0) {
+            EXPECT_DOUBLE_EQ(previousTrackWidth / 2.0, metrics.trackWidth);
+        }
+        previousTrackWidth = metrics.trackWidth;
+    }
+}
+
 TEST(WaveformRgbColumnSamplerTest, NeverReadsBeyondCompletedStereoPrefix) {
     constexpr int kVisualFrames = 64;
     auto data = makeWaveformData(kVisualFrames);

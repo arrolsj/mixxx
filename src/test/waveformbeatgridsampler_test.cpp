@@ -93,6 +93,25 @@ TEST(WaveformBeatGridSamplerTest, ZoomOneThroughTenStaysBoundedAtEveryDpr) {
     }
 }
 
+TEST(WaveformBeatGridSamplerTest, DownbeatsOnlyOmitsOrdinaryBeatLines) {
+    const auto pBeats = Beats::fromConstTempo(
+            kSampleRate, audio::kStartFramePos, Bpm(120.0));
+    const auto trackEnd = audio::FramePos(60 * kSampleRate);
+    const auto beatGridData = buildWaveformBeatGridData(pBeats, trackEnd);
+
+    for (const double dpr : std::array<double, 2>{1.0, 2.0}) {
+        const auto lines = sampleWaveformBeatGridLines(beatGridData,
+                trackEnd,
+                makeViewport(static_cast<int>(800 * dpr), 800.0, 0.0),
+                dpr,
+                true);
+        ASSERT_FALSE(lines.empty());
+        EXPECT_TRUE(std::all_of(lines.begin(), lines.end(), [](const auto& line) {
+            return line.isDownbeat;
+        }));
+    }
+}
+
 TEST(WaveformBeatGridSamplerTest,
         ExactDecodedLengthAlignsCueCentersAcrossZoomAndDpr) {
     const auto pBeats = Beats::fromConstTempo(

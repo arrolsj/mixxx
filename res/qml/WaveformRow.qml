@@ -19,6 +19,8 @@ Item {
     property color memoryCueColor: "#FF0000"
     property color loopCueColor: "#F8A030"
     property color mainCueColor: "#F8A030"
+    property real waveformZoom: zoomControl.value
+    property bool beatGridDownbeatsOnly: false
 
     Item {
         id: waveformContainer
@@ -122,7 +124,7 @@ Item {
             anchors.fill: parent
             player: root.deckPlayer
             displayPosition: waveformContainer.displayedPlayPosition
-            zoom: zoomControl.value
+            zoom: root.waveformZoom
             rateRatio: rateRatioControl.value
             playMarkerPosition: playMarker.screenPosition
             axesColor: "#FFFFFF"
@@ -130,6 +132,7 @@ Item {
             midColor: "#00FF00"
             lowColor: "#FF0000"
             beatGridVisible: true
+            beatGridDownbeatsOnly: root.beatGridDownbeatsOnly
             beatColor: Theme.waveformBeatColor
             downbeatColor: Theme.waveformDownbeatColor
             visible: root.deckPlayer.isLoaded

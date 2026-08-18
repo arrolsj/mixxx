@@ -30,6 +30,8 @@ class QmlViewportWaveform : public QQuickItem {
     Q_PROPERTY(QColor lowColor READ lowColor WRITE setLowColor NOTIFY lowColorChanged)
     Q_PROPERTY(bool beatGridVisible READ beatGridVisible WRITE setBeatGridVisible
                     NOTIFY beatGridVisibleChanged)
+    Q_PROPERTY(bool beatGridDownbeatsOnly READ beatGridDownbeatsOnly
+                    WRITE setBeatGridDownbeatsOnly NOTIFY beatGridDownbeatsOnlyChanged)
     Q_PROPERTY(QColor beatColor READ beatColor WRITE setBeatColor NOTIFY beatColorChanged)
     Q_PROPERTY(QColor downbeatColor READ downbeatColor WRITE setDownbeatColor
                     NOTIFY downbeatColorChanged)
@@ -63,6 +65,8 @@ class QmlViewportWaveform : public QQuickItem {
     void setLowColor(const QColor& color);
     bool beatGridVisible() const;
     void setBeatGridVisible(bool visible);
+    bool beatGridDownbeatsOnly() const;
+    void setBeatGridDownbeatsOnly(bool downbeatsOnly);
     QColor beatColor() const;
     void setBeatColor(const QColor& color);
     QColor downbeatColor() const;
@@ -82,6 +86,7 @@ class QmlViewportWaveform : public QQuickItem {
     void midColorChanged();
     void lowColorChanged();
     void beatGridVisibleChanged();
+    void beatGridDownbeatsOnlyChanged();
     void beatColorChanged();
     void downbeatColorChanged();
     void trackWidthChanged();
@@ -122,6 +127,7 @@ class QmlViewportWaveform : public QQuickItem {
     QColor m_midColor{Qt::green};
     QColor m_lowColor{Qt::red};
     bool m_beatGridVisible{false};
+    bool m_beatGridDownbeatsOnly{false};
     QColor m_beatColor{Qt::white};
     QColor m_downbeatColor{Qt::white};
 };

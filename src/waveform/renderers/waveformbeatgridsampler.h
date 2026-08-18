@@ -55,7 +55,8 @@ inline std::vector<WaveformBeatGridLine> sampleWaveformBeatGridLines(
         const WaveformBeatGridData& beatGridData,
         audio::FramePos trackEndPosition,
         const WaveformRgbViewportMetrics& viewport,
-        double devicePixelRatio) {
+        double devicePixelRatio,
+        bool downbeatsOnly = false) {
     const double dpr = std::max(devicePixelRatio, 0.01);
     if (beatGridData.pBeats == nullptr || beatGridData.sourceBeatCount <= 0 ||
             !trackEndPosition.isValid() ||
@@ -96,8 +97,12 @@ inline std::vector<WaveformBeatGridLine> sampleWaveformBeatGridLines(
         return {};
     }
 
-    const int beatStride =
-            visibleSourceBeatCount <= kMaximumRenderedBeatGridLines
+    const int beatStride = downbeatsOnly
+            ? 4 * std::max(1,
+                      static_cast<int>(std::ceil(
+                              static_cast<double>(visibleSourceBeatCount) /
+                              (4 * kMaximumRenderedBeatGridLines))))
+            : visibleSourceBeatCount <= kMaximumRenderedBeatGridLines
             ? 1
             : 4 * static_cast<int>(std::ceil(
                       static_cast<double>(visibleSourceBeatCount) /
