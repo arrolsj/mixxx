@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -19,6 +20,10 @@
 #include "mixer/deck.h"
 #include "mixer/playerinfo.h"
 #include "mixer/playermanager.h"
+#ifdef MIXXX_USE_QML
+#include "qml/qmlplayermanagerproxy.h"
+#include "qml/qmlplayerproxy.h"
+#endif
 #include "sources/soundsourceproxy.h"
 #include "test/mixxxdbtest.h"
 #include "test/soundsourceproviderregistration.h"
@@ -190,6 +195,38 @@ class PlayerManagerSafeStopTest : public PlayerManagerTest {
     QByteArray m_previousMode;
     QByteArray m_previousRoots;
 };
+
+#ifdef MIXXX_USE_QML
+TEST_F(PlayerManagerTest, QmlPlayerProxyIsManagerOwnedAndSharedPerPlayer) {
+    QPointer<QObject> pDeck1Guard;
+    {
+        mixxx::qml::QmlPlayerManagerProxy playerManagerProxy(m_pPlayerManager);
+
+        QObject* pDeck1Proxy =
+                playerManagerProxy.getPlayer(QStringLiteral("[Channel1]"));
+        QObject* pDeck1ProxyAgain =
+                playerManagerProxy.getPlayer(QStringLiteral("[Channel1]"));
+        QObject* pDeck2Proxy =
+                playerManagerProxy.getPlayer(QStringLiteral("[Channel2]"));
+
+        ASSERT_NE(pDeck1Proxy, nullptr);
+        EXPECT_EQ(pDeck1ProxyAgain, pDeck1Proxy);
+        ASSERT_NE(pDeck2Proxy, nullptr);
+        EXPECT_NE(pDeck2Proxy, pDeck1Proxy);
+        EXPECT_EQ(pDeck1Proxy->parent(), &playerManagerProxy);
+        EXPECT_EQ(QQmlEngine::objectOwnership(pDeck1Proxy),
+                QQmlEngine::CppOwnership);
+
+        auto* pTypedDeck1Proxy =
+                qobject_cast<mixxx::qml::QmlPlayerProxy*>(pDeck1Proxy);
+        ASSERT_NE(pTypedDeck1Proxy, nullptr);
+        EXPECT_EQ(pTypedDeck1Proxy->internalTrackPlayer(),
+                m_pPlayerManager->getPlayer(QStringLiteral("[Channel1]")));
+        pDeck1Guard = pDeck1Proxy;
+    }
+    EXPECT_TRUE(pDeck1Guard.isNull());
+}
+#endif
 
 TEST_F(PlayerManagerTest, TrackLoadsWithoutEngineCallback) {
     auto deck1 = m_pPlayerManager->getDeck(0);

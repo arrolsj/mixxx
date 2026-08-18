@@ -1,4 +1,5 @@
 #pragma once
+#include <QHash>
 #include <QObject>
 #include <QQmlEngine>
 #include <QString>
@@ -34,6 +35,7 @@ class QmlPlayerManagerProxy : public QObject {
     static inline std::shared_ptr<PlayerManager> s_pPlayerManager;
 
     const std::shared_ptr<PlayerManager> m_pPlayerManager;
+    QHash<QString, QmlPlayerProxy*> m_playerProxies;
 };
 
 } // namespace qml

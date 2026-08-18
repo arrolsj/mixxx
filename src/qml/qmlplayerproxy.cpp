@@ -59,8 +59,7 @@ double QmlPlayerProxy::getVisualPlayPosition(int frameIntervalMicros) {
         return -1.0;
     }
 
-    // Do not retain engine-owned timing state in a JavaScript-owned proxy.
-    // Proxy lifetime is controlled by QML garbage collection, while the
+    // Do not retain engine-owned timing state in the proxy. The
     // VisualPlayPosition lifetime is controlled by the audio engine.
     const auto pVisualPlayPosition =
             VisualPlayPosition::getVisualPlayPosition(m_pTrackPlayer->getGroup());

@@ -22,11 +22,16 @@ QObject* QmlPlayerManagerProxy::getPlayer(const QString& group) {
         return nullptr;
     }
 
+    QmlPlayerProxy* pCachedProxy = m_playerProxies.value(group, nullptr);
+    if (pCachedProxy && pCachedProxy->internalTrackPlayer() == pPlayer) {
+        return pCachedProxy;
+    }
+
     // A deck player can be replaced while Mixxx initializes its topology.
-    // Keep the proxy scoped to the QML reference so a later getPlayer() call
-    // always resolves the current BaseTrackPlayer.
-    QmlPlayerProxy* pPlayerProxy = new QmlPlayerProxy(pPlayer);
-    QQmlEngine::setObjectOwnership(pPlayerProxy, QQmlEngine::JavaScriptOwnership);
+    // Retain stale children until this manager is destroyed so existing QML
+    // references remain valid, while later calls resolve the current player.
+    QmlPlayerProxy* pPlayerProxy = new QmlPlayerProxy(pPlayer, this);
+    QQmlEngine::setObjectOwnership(pPlayerProxy, QQmlEngine::CppOwnership);
     connect(pPlayerProxy,
             &QmlPlayerProxy::loadTrackFromLocationRequested,
             this,
@@ -39,6 +44,7 @@ QObject* QmlPlayerManagerProxy::getPlayer(const QString& group) {
             [this, group](const QString& sourceGroup) {
                 m_pPlayerManager->slotCloneDeck(sourceGroup, group);
             });
+    m_playerProxies.insert(group, pPlayerProxy);
     return pPlayerProxy;
 }
 
