@@ -810,7 +810,7 @@ void LoopingControl::slotLoopRemove() {
     if (!pLoadedTrack) {
         return;
     }
-    const QList<CuePointer> cuePoints = pLoadedTrack->getCuePoints();
+    const QList<CuePointer> cuePoints = pLoadedTrack->getCuePointsForPlayback();
     for (const auto& pCue : cuePoints) {
         if (pCue->getType() == mixxx::CueType::Loop && pCue->getHotCue() == Cue::kNoHotCue) {
             pLoadedTrack->removeCue(pCue);

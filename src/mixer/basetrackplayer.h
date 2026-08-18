@@ -40,6 +40,17 @@ class BaseTrackPlayer : public BasePlayer {
 
     virtual TrackPointer getLoadedTrack() const = 0;
     virtual void setupEqControls() = 0;
+    /// Stops playback and ejects the loaded track without applying the
+    /// user-facing eject button restrictions for playing or double-clicking.
+    virtual void stopAndEjectTrack() {
+        slotEjectTrack(1.0);
+    }
+    /// Returns true after this player has released every track-backed resource.
+    /// Test players without an asynchronous reader only need to clear their
+    /// TrackPointer.
+    virtual bool isTrackReleased() const {
+        return !getLoadedTrack();
+    }
     virtual bool isTrackMenuControlAvailable() {
         return false;
     };
@@ -77,6 +88,8 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
     ~BaseTrackPlayerImpl() override;
 
     TrackPointer getLoadedTrack() const final;
+    void stopAndEjectTrack() final;
+    bool isTrackReleased() const final;
 
     /// TODO(XXX): Only exposed to let the passthrough AudioInput get
     /// connected. Delete me when EngineMixer supports AudioInput assigning.

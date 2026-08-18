@@ -216,16 +216,6 @@ class PlatformRemovableMediaService final : public IRemovableMediaService {
                     tr("Safe removal is disabled in the current adapter mode.")));
             return false;
         }
-        if (m_snapshotWatcher.isRunning() ||
-                m_snapshotApplyPending ||
-                m_debounceTimer.isActive() ||
-                m_refreshPending ||
-                m_readinessRetryTimer.isActive()) {
-            emitFailure(makeFailure(deviceId,
-                    ErrorCode::Busy,
-                    tr("The removable-media inventory is still being reconciled.")));
-            return false;
-        }
         if (m_safeStopOperationPending ||
                 m_safeStopWatcher.isRunning() ||
                 !m_verifyingDeviceId.isEmpty()) {
@@ -238,8 +228,26 @@ class PlatformRemovableMediaService final : public IRemovableMediaService {
 #if defined(__LINUX__)
         m_safeStopOperationPending = true;
         m_requestedSafeStopRemovalGroupId = deviceIt->removalGroupId;
-        m_safeStopFuture = QtConcurrent::run(requestUDisks2SafeStop, *deviceIt);
-        m_safeStopWatcher.setFuture(m_safeStopFuture);
+        if (m_debounceTimer.isActive() ||
+                m_refreshPending ||
+                m_readinessRetryTimer.isActive()) {
+            m_debounceTimer.stop();
+            m_readinessRetryTimer.stop();
+            m_refreshPending = true;
+        }
+        if (m_snapshotWatcher.isRunning() || m_snapshotApplyPending) {
+            // A periodic snapshot already owns the UDisks inventory. Accept
+            // and freeze this request, then revalidate it against that exact
+            // authoritative result before starting the physical operation.
+            // Rejecting here forces a user-visible retry after players have
+            // already been cleared and creates a 4-second polling race.
+            m_queuedSafeStopDeviceId = deviceId;
+            m_queuedSafeStopExpectedGeneration = expectedGeneration;
+            m_queuedSafeStopRemovalGroupId = deviceIt->removalGroupId;
+            m_refreshPending = true;
+            return true;
+        }
+        startPlatformSafeStop(*deviceIt);
         return true;
 #else
         emitFailure(makeFailure(deviceId,
@@ -319,6 +327,13 @@ class PlatformRemovableMediaService final : public IRemovableMediaService {
             scheduleReadinessRetry();
             verifySafeStop(false);
             m_snapshotApplyPending = false;
+            if (hasQueuedSafeStop()) {
+                failQueuedSafeStop(makeFailure(
+                        m_queuedSafeStopDeviceId,
+                        ErrorCode::IoError,
+                        tr("The authoritative removable-media inventory is unavailable.")));
+                return;
+            }
             flushPendingRefreshAfterOperation();
             return;
         }
@@ -369,7 +384,77 @@ class PlatformRemovableMediaService final : public IRemovableMediaService {
         scheduleReadinessRetry();
         verifySafeStop(true);
         m_snapshotApplyPending = false;
+        continueQueuedSafeStopAfterSnapshot();
         flushPendingRefreshAfterOperation();
+    }
+
+    void startPlatformSafeStop(const RemovableMediaDevice& device) {
+#if defined(__LINUX__)
+        m_safeStopFuture = QtConcurrent::run(requestUDisks2SafeStop, device);
+        m_safeStopWatcher.setFuture(m_safeStopFuture);
+#else
+        Q_UNUSED(device);
+#endif
+    }
+
+    bool hasQueuedSafeStop() const {
+        return !m_queuedSafeStopDeviceId.isEmpty();
+    }
+
+    void clearQueuedSafeStop() {
+        m_queuedSafeStopDeviceId.clear();
+        m_queuedSafeStopExpectedGeneration = 0;
+        m_queuedSafeStopRemovalGroupId.clear();
+    }
+
+    void failQueuedSafeStop(SafeStopResult result) {
+        clearQueuedSafeStop();
+        m_requestedSafeStopRemovalGroupId.clear();
+        QTimer::singleShot(0,
+                this,
+                [this, result = std::move(result)] {
+                    m_safeStopOperationPending = false;
+                    emit safeStopFinished(result);
+                    flushPendingRefreshAfterOperation();
+                });
+    }
+
+    void continueQueuedSafeStopAfterSnapshot() {
+        if (!hasQueuedSafeStop()) {
+            return;
+        }
+        const auto deviceIt = std::find_if(m_devices.cbegin(),
+                m_devices.cend(),
+                [this](const RemovableMediaDevice& device) {
+                    return device.deviceId == m_queuedSafeStopDeviceId;
+                });
+        if (deviceIt == m_devices.cend()) {
+            failQueuedSafeStop(makeFailure(
+                    m_queuedSafeStopDeviceId,
+                    ErrorCode::NotFound,
+                    tr("The selected removable device is no longer present.")));
+            return;
+        }
+        if (deviceIt->generation != m_queuedSafeStopExpectedGeneration ||
+                deviceIt->removalGroupId !=
+                        m_queuedSafeStopRemovalGroupId) {
+            failQueuedSafeStop(makeFailure(
+                    m_queuedSafeStopDeviceId,
+                    ErrorCode::StaleGeneration,
+                    tr("The removable device list changed. Select the device again.")));
+            return;
+        }
+        if (!deviceIt->canStop) {
+            failQueuedSafeStop(makeFailure(
+                    m_queuedSafeStopDeviceId,
+                    ErrorCode::Unsupported,
+                    tr("Safe removal is disabled in the current adapter mode.")));
+            return;
+        }
+
+        const RemovableMediaDevice device = *deviceIt;
+        clearQueuedSafeStop();
+        startPlatformSafeStop(device);
     }
 
     void scheduleReadinessRetry() {
@@ -502,6 +587,9 @@ class PlatformRemovableMediaService final : public IRemovableMediaService {
     QString m_verifyingDeviceId;
     QString m_verifyingRemovalGroupId;
     QString m_requestedSafeStopRemovalGroupId;
+    QString m_queuedSafeStopDeviceId;
+    quint64 m_queuedSafeStopExpectedGeneration{0};
+    QString m_queuedSafeStopRemovalGroupId;
     QSet<QString> m_presentRemovalGroupIds;
     SafeStopResult m_pendingPlatformFailure;
     bool m_failureReconciliationPending{false};

@@ -5,6 +5,7 @@
 
 namespace {
 constexpr double kDesiredChannelHeight = 255;
+constexpr int kProgressRefreshIntervalMillis = 67;
 } // namespace
 
 namespace mixxx {
@@ -17,7 +18,14 @@ QmlWaveformOverview::QmlWaveformOverview(QQuickItem* parent)
           m_renderer(Renderer::RGB),
           m_colorHigh(0xFF0000),
           m_colorMid(0x00FF00),
-          m_colorLow(0x0000FF) {
+          m_colorLow(0x0000FF),
+          m_lastProgressCompletion(-1) {
+    m_progressTimer.setInterval(kProgressRefreshIntervalMillis);
+    m_progressTimer.setTimerType(Qt::CoarseTimer);
+    connect(&m_progressTimer,
+            &QTimer::timeout,
+            this,
+            &QmlWaveformOverview::slotWaveformProgressTimer);
 }
 
 QmlPlayerProxy* QmlWaveformOverview::getPlayer() const {
@@ -112,7 +120,45 @@ void QmlWaveformOverview::setCurrentTrack(TrackPointer pTrack) {
 }
 
 void QmlWaveformOverview::slotWaveformUpdated() {
+    const TrackPointer pTrack = m_pCurrentTrack;
+    const ConstWaveformPointer pWaveform =
+            pTrack ? pTrack->getWaveformSummary() : ConstWaveformPointer{};
+    m_lastProgressCompletion = pWaveform ? pWaveform->getCompletion() : -1;
+    updateProgressTimer();
     update();
+}
+
+void QmlWaveformOverview::slotWaveformProgressTimer() {
+    const TrackPointer pTrack = m_pCurrentTrack;
+    const ConstWaveformPointer pWaveform =
+            pTrack ? pTrack->getWaveformSummary() : ConstWaveformPointer{};
+    if (!pWaveform) {
+        m_progressTimer.stop();
+        return;
+    }
+
+    const int completion = pWaveform->getCompletion();
+    if (completion != m_lastProgressCompletion) {
+        m_lastProgressCompletion = completion;
+        update();
+    }
+    if (completion >= pWaveform->getDataSize()) {
+        m_progressTimer.stop();
+    }
+}
+
+void QmlWaveformOverview::updateProgressTimer() {
+    const TrackPointer pTrack = m_pCurrentTrack;
+    const ConstWaveformPointer pWaveform =
+            pTrack ? pTrack->getWaveformSummary() : ConstWaveformPointer{};
+    if (!pWaveform || pWaveform->getDataSize() <= 0 ||
+            pWaveform->getCompletion() >= pWaveform->getDataSize()) {
+        m_progressTimer.stop();
+        return;
+    }
+    if (!m_progressTimer.isActive()) {
+        m_progressTimer.start();
+    }
 }
 
 void QmlWaveformOverview::paint(QPainter* pPainter) {

@@ -64,34 +64,6 @@ Item {
         }
 
         Mixxx.ControlProxy {
-            id: introStartPosition
-
-            group: root.group
-            key: "intro_start_position"
-        }
-
-        Mixxx.ControlProxy {
-            id: introEndPosition
-
-            group: root.group
-            key: "intro_end_position"
-        }
-
-        Mixxx.ControlProxy {
-            id: outroStartPosition
-
-            group: root.group
-            key: "outro_start_position"
-        }
-
-        Mixxx.ControlProxy {
-            id: outroEndPosition
-
-            group: root.group
-            key: "outro_end_position"
-        }
-
-        Mixxx.ControlProxy {
             id: loopStartPosition
 
             group: root.group
@@ -127,7 +99,7 @@ Item {
         property real displayedPlayPosition: playPositionControl.value
 
         Timer {
-            interval: 16
+            interval: 8
             repeat: true
             running: root.deckPlayer.isLoaded
             onTriggered: {
@@ -142,55 +114,8 @@ Item {
         // exactly one column per physical viewport pixel. Each column is a
         // range maximum on a track-global pixel grid, matching the stable
         // QWidget RGB renderer without creating an unbounded item or texture.
-        Item {
-            id: beatGrid
-
-            width: viewportWaveform.trackWidth
-            height: parent.height
-            x: viewportWaveform.contentX
-            visible: root.deckPlayer.isLoaded
-            z: 0
-
-            Repeater {
-                model: root.deckPlayer.beatsModel
-
-                Shape {
-                    id: beatLine
-
-                    required property real framePosition
-                    required property int beatNumber
-                    readonly property bool isDownbeat: beatNumber === 1
-
-                    property real physicalPixel: 2 / Screen.devicePixelRatio
-                    property real trackX: (beatLine.framePosition * 2 / samplesControl.value) * beatGrid.width
-
-                    width: physicalPixel
-                    height: beatGrid.height
-                    opacity: beatLine.isDownbeat ? 0.9 : 0.65
-                    // Snap the final global position, including contentX, so
-                    // dashed lines stay crisp while sharing the waveform's
-                    // viewport-driven track coordinate transform.
-                    x: Math.round((beatGrid.x + trackX) * Screen.devicePixelRatio) /
-                            Screen.devicePixelRatio - beatGrid.x - width / 2
-
-                    ShapePath {
-                        strokeColor: beatLine.isDownbeat ? Theme.waveformDownbeatColor : Theme.waveformBeatColor
-                        strokeWidth: beatLine.physicalPixel
-                        strokeStyle: ShapePath.DashLine
-                        dashPattern: beatLine.isDownbeat ? [4, 3] : [3, 3]
-                        fillColor: "transparent"
-                        startX: beatLine.width / 2
-                        startY: 0
-
-                        PathLine {
-                            x: beatLine.width / 2
-                            y: beatLine.height
-                        }
-                    }
-                }
-            }
-        }
-
+        // The beat grid is batched into the same bounded QSG geometry so zoom
+        // never fans out across independent QML Shape delegates.
         Mixxx.ViewportWaveform {
             id: viewportWaveform
 
@@ -204,6 +129,9 @@ Item {
             highColor: "#0000FF"
             midColor: "#00FF00"
             lowColor: "#FF0000"
+            beatGridVisible: true
+            beatColor: Theme.waveformBeatColor
+            downbeatColor: Theme.waveformDownbeatColor
             visible: root.deckPlayer.isLoaded
             z: 1
         }
@@ -219,27 +147,6 @@ Item {
             x: viewportWaveform.contentX
             visible: root.deckPlayer.isLoaded
             z: 2
-
-            Skin.WaveformIntroOutro {
-                id: intro
-
-                visible: introStartPosition.value != -1 || introEndPosition.value != -1
-
-                height: waveform.height
-                x: ((introStartPosition.value != -1 ? introStartPosition.value : introEndPosition.value) / samplesControl.value) * waveform.width
-                width: introEndPosition.value == -1 ? 0 : ((introEndPosition.value - introStartPosition.value) / samplesControl.value) * waveform.width
-            }
-
-            Skin.WaveformIntroOutro {
-                id: outro
-
-                visible: outroStartPosition.value != -1 || outroEndPosition.value != -1
-                isIntro: false
-
-                height: waveform.height
-                x: ((outroStartPosition.value != -1 ? outroStartPosition.value : outroEndPosition.value) / samplesControl.value) * waveform.width
-                width: outroEndPosition.value == -1 || outroStartPosition.value == -1 ? 0 : ((outroEndPosition.value - outroStartPosition.value) / samplesControl.value) * waveform.width
-            }
 
             Skin.WaveformLoop {
                 id: loop

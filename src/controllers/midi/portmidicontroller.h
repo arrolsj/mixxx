@@ -2,8 +2,10 @@
 
 #include <portmidi.h>
 
+#include <QByteArray>
 #include <QElapsedTimer>
 #include <QScopedPointer>
+#include <QStringList>
 
 #include "controllers/midi/midicontroller.h"
 #include "controllers/midi/portmididevice.h"
@@ -83,6 +85,12 @@ class PortMidiController : public MidiController {
     bool hasDisconnected() const override {
         return m_bDisconnected;
     }
+
+#if defined(__LINUX__)
+    static bool linuxAlsaTopologyContainsPorts(
+            const QByteArray& topology,
+            const QStringList& expectedPortNames);
+#endif
 
     // The sysex data must already contain the start byte 0xf0 and the end byte
     // 0xf7.

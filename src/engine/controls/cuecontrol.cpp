@@ -622,7 +622,7 @@ void CueControl::loadCuesFromTrack() {
     CuePointer pIntroCue;
     CuePointer pOutroCue;
 
-    const QList<CuePointer> cues = m_pLoadedTrack->getCuePoints();
+    const QList<CuePointer> cues = m_pLoadedTrack->getCuePointsForPlayback();
     for (const auto& pCue : cues) {
         switch (pCue->getType()) {
         case mixxx::CueType::MainCue:

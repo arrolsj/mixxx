@@ -100,6 +100,29 @@ class AnalyzerWaveformTest : public MixxxTest {
 };
 
 // Basic test to make sure we don't alter the input buffer and don't step out of bounds.
+TEST_F(AnalyzerWaveformTest, publishesPartialSummaryCompletionWhileAnalyzing) {
+    ASSERT_TRUE(m_aw.initialize(AnalyzerTrack(m_pTrack),
+            m_pTrack->getSampleRate(),
+            kBigBufSize / kChannelCount));
+
+    ConstWaveformPointer pSummary = m_pTrack->getWaveformSummary();
+    ASSERT_NE(pSummary, nullptr);
+    EXPECT_EQ(pSummary->getCompletion(), 0);
+
+    const SINT halfBufferSize = static_cast<SINT>(kBigBufSize / 2);
+    ASSERT_TRUE(m_aw.processSamples(&m_canaryBigBuf[kCanarySize], halfBufferSize));
+    const int firstCompletion = pSummary->getCompletion();
+    EXPECT_GT(firstCompletion, 0);
+    EXPECT_LT(firstCompletion, pSummary->getDataSize());
+
+    ASSERT_TRUE(m_aw.processSamples(
+            &m_canaryBigBuf[kCanarySize + halfBufferSize], halfBufferSize));
+    EXPECT_GT(pSummary->getCompletion(), firstCompletion);
+    EXPECT_LE(pSummary->getCompletion(), pSummary->getDataSize());
+
+    m_aw.cleanup();
+}
+
 TEST_F(AnalyzerWaveformTest, canary) {
     m_aw.initialize(AnalyzerTrack(m_pTrack),
             m_pTrack->getSampleRate(),

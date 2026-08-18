@@ -5,6 +5,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickPaintedItem>
+#include <QTimer>
 
 #include "qml/qmlplayerproxy.h"
 #include "track/track.h"
@@ -54,6 +55,7 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     void slotTrackLoading(TrackPointer pNewTrack, TrackPointer pOldTrack);
     void slotTrackUnloaded();
     void slotWaveformUpdated();
+    void slotWaveformProgressTimer();
 
   signals:
     void playerChanged();
@@ -69,6 +71,7 @@ class QmlWaveformOverview : public QQuickPaintedItem {
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
+    void updateProgressTimer();
     void drawFiltered(QPainter* pPainter,
             Channels channels,
             ConstWaveformPointer pWaveform,
@@ -86,6 +89,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     QColor m_colorHigh;
     QColor m_colorMid;
     QColor m_colorLow;
+    QTimer m_progressTimer;
+    int m_lastProgressCompletion;
 };
 
 } // namespace qml

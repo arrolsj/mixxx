@@ -172,7 +172,8 @@ void PlayerManager::bindToLibrary(Library* pLibrary) {
     DEBUG_ASSERT(!m_pTrackAnalysisScheduler);
     m_pTrackAnalysisScheduler = pLibrary->createTrackAnalysisScheduler(
             kNumberOfAnalyzerThreads,
-            AnalyzerModeFlags::WithWaveform);
+            static_cast<AnalyzerModeFlags>(
+                    AnalyzerModeFlags::WithWaveform | AnalyzerModeFlags::LowPriority));
 
     connect(m_pTrackAnalysisScheduler.get(), &TrackAnalysisScheduler::trackProgress,
             this, &PlayerManager::onTrackAnalysisProgress);

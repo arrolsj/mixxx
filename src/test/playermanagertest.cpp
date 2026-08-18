@@ -1,8 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QSignalSpy>
 #include <QTest>
 
 #include "control/controlindicatortimer.h"
+#include "control/controlobject.h"
 #include "database/mixxxdb.h"
 #include "effects/effectsmanager.h"
 #include "engine/channels/enginedeck.h"
@@ -36,6 +40,20 @@ void waitForTrackToBeLoaded(Deck* pDeck) {
     while (!pDeck->getEngineDeck()->getEngineBuffer()->isTrackLoaded()) {
         QTest::qSleep(100); // millis
     }
+}
+
+bool waitForTrackToBeReleased(
+        Deck* pDeck,
+        EngineMixer* pEngine,
+        int timeoutMillis = 5000) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!pDeck->isTrackReleased() &&
+            !elapsed.hasExpired(timeoutMillis)) {
+        pEngine->process(1024);
+        QTest::qWait(10);
+    }
+    return pDeck->isTrackReleased();
 }
 
 } // namespace
@@ -127,6 +145,68 @@ class PlayerManagerTest : public MixxxDbTest, SoundSourceProviderRegistration {
     std::shared_ptr<Library> m_pLibrary;
 };
 
+class PlayerManagerSafeStopTest : public PlayerManagerTest {
+  public:
+    void SetUp() override {
+        m_previousModeWasSet =
+                qEnvironmentVariableIsSet("LASTCUE_REMOVABLE_MEDIA_MODE");
+        m_previousRootsWereSet =
+                qEnvironmentVariableIsSet("LASTCUE_FAKE_MEDIA_ROOTS");
+        m_previousMode = qgetenv("LASTCUE_REMOVABLE_MEDIA_MODE");
+        m_previousRoots = qgetenv("LASTCUE_FAKE_MEDIA_ROOTS");
+        qputenv("LASTCUE_REMOVABLE_MEDIA_MODE", "fake");
+        qputenv("LASTCUE_FAKE_MEDIA_ROOTS",
+                getTestDir().absolutePath().toLocal8Bit());
+        m_pConfig->set(
+                ConfigKey("[Library]", "ShowRekordboxLibrary"),
+                ConfigValue(1));
+        PlayerManagerTest::SetUp();
+    }
+
+    void TearDown() override {
+        PlayerManagerTest::TearDown();
+        restoreEnvironmentVariable("LASTCUE_REMOVABLE_MEDIA_MODE",
+                m_previousModeWasSet,
+                m_previousMode);
+        restoreEnvironmentVariable("LASTCUE_FAKE_MEDIA_ROOTS",
+                m_previousRootsWereSet,
+                m_previousRoots);
+    }
+
+  private:
+    static void restoreEnvironmentVariable(
+            const char* name,
+            bool wasSet,
+            const QByteArray& value) {
+        if (wasSet) {
+            qputenv(name, value);
+        } else {
+            qunsetenv(name);
+        }
+    }
+
+    bool m_previousModeWasSet{false};
+    bool m_previousRootsWereSet{false};
+    QByteArray m_previousMode;
+    QByteArray m_previousRoots;
+};
+
+TEST_F(PlayerManagerTest, TrackLoadsWithoutEngineCallback) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    TrackPointer pTrack =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack);
+
+    deck1->slotLoadTrack(pTrack, false);
+
+    // A missing audio device means EngineMixer::process() is not called. The
+    // track-loading worker must still run so the UI receives confirmation.
+    QTRY_VERIFY_WITH_TIMEOUT(
+            deck1->getEngineDeck()->getEngineBuffer()->isTrackLoaded(),
+            5000);
+    EXPECT_EQ(pTrack, deck1->getLoadedTrack());
+}
+
 TEST_F(PlayerManagerTest, UnEjectTest) {
     // Ejecting an empty deck with no previously-recorded ejected track has no effect.
     auto deck1 = m_pPlayerManager->getDeck(0);
@@ -161,6 +241,102 @@ TEST_F(PlayerManagerTest, UnEjectTest) {
     deck2->slotEjectTrack(2.0);
     ASSERT_NE(nullptr, deck2->getLoadedTrack());
     ASSERT_EQ(testId1, deck2->getLoadedTrack()->getId());
+}
+
+TEST_F(PlayerManagerTest, StopAndEjectTrackClearsPausedAndPlayingDeck) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    const ConfigKey playKey(deck1->getGroup(), QStringLiteral("play"));
+
+    TrackPointer pTrack1 =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack1);
+    deck1->slotLoadTrack(pTrack1, false);
+    m_pEngine->process(1024);
+    waitForTrackToBeLoaded(deck1);
+    ASSERT_FALSE(ControlObject::toBool(playKey));
+
+    deck1->stopAndEjectTrack();
+    EXPECT_EQ(nullptr, deck1->getLoadedTrack());
+    EXPECT_FALSE(deck1->getEngineDeck()->getEngineBuffer()->isTrackLoaded());
+    EXPECT_FALSE(ControlObject::toBool(playKey));
+    EXPECT_TRUE(waitForTrackToBeReleased(
+            deck1, m_pEngine.get()));
+
+    TrackPointer pTrack2 =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest2));
+    ASSERT_NE(nullptr, pTrack2);
+    deck1->slotLoadTrack(pTrack2, true);
+    m_pEngine->process(1024);
+    waitForTrackToBeLoaded(deck1);
+    ASSERT_TRUE(ControlObject::toBool(playKey));
+
+    deck1->stopAndEjectTrack();
+    EXPECT_EQ(nullptr, deck1->getLoadedTrack());
+    EXPECT_FALSE(deck1->getEngineDeck()->getEngineBuffer()->isTrackLoaded());
+    EXPECT_FALSE(ControlObject::toBool(playKey));
+    EXPECT_TRUE(waitForTrackToBeReleased(
+            deck1, m_pEngine.get()));
+}
+
+TEST_F(PlayerManagerSafeStopTest,
+        WaitsForReaderReleaseBeforePlatformSafeStop) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while ((m_pLibrary->isRekordboxDeviceScanRunning() ||
+                   m_pLibrary->removableMediaDevices().isEmpty()) &&
+            !elapsed.hasExpired(5000)) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QTest::qWait(10);
+    }
+    ASSERT_FALSE(m_pLibrary->isRekordboxDeviceScanRunning());
+    const auto devices = m_pLibrary->removableMediaDevices();
+    ASSERT_EQ(1, devices.size());
+    ASSERT_TRUE(devices.constFirst().canStop);
+
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    TrackPointer pTrack =
+            getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack);
+    deck1->slotLoadTrack(pTrack, true);
+    m_pEngine->process(1024);
+    waitForTrackToBeLoaded(deck1);
+    ASSERT_FALSE(deck1->isTrackReleased());
+
+    qRegisterMetaType<mixxx::removablemedia::SafeStopResult>();
+    QSignalSpy safeStopSpy(
+            m_pLibrary.get(),
+            &Library::removableMediaSafeStopFinished);
+    ASSERT_TRUE(m_pLibrary->requestRemovableMediaSafeStop(
+            devices.constFirst().deviceId,
+            devices.constFirst().generation));
+    EXPECT_EQ(nullptr, deck1->getLoadedTrack());
+    EXPECT_FALSE(deck1->isTrackReleased());
+
+    // Event processing alone may run the release poll, but cannot consume the
+    // CachingReader worker acknowledgement. The fake platform stop must still
+    // be pending until an engine callback observes TRACK_UNLOADED.
+    QTest::qWait(50);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    EXPECT_TRUE(safeStopSpy.isEmpty());
+    ASSERT_EQ(1, m_pLibrary->removableMediaDevices().size());
+    EXPECT_EQ(mixxx::removablemedia::MediaState::Quiescing,
+            m_pLibrary->removableMediaDevices().constFirst().state);
+
+    elapsed.restart();
+    while (safeStopSpy.isEmpty() && !elapsed.hasExpired(5000)) {
+        m_pEngine->process(1024);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QTest::qWait(10);
+    }
+    ASSERT_FALSE(safeStopSpy.isEmpty());
+    ASSERT_TRUE(deck1->isTrackReleased());
+    const auto result =
+            qvariant_cast<mixxx::removablemedia::SafeStopResult>(
+                    safeStopSpy.constFirst().constFirst());
+    EXPECT_EQ(mixxx::removablemedia::MediaState::SafeToRemove,
+            result.state);
+    EXPECT_EQ(mixxx::removablemedia::ErrorCode::None,
+            result.errorCode);
 }
 
 // Loading a new track in a deck causes the old one to be ejected.

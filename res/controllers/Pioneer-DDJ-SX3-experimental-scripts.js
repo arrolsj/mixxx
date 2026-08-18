@@ -112,6 +112,15 @@ PioneerDDJSX.gridSlideSelected = [false, false, false, false];
 PioneerDDJSX.needleSearchTouched = [false, false, false, false];
 PioneerDDJSX.chFaderStart = [null, null, null, null];
 PioneerDDJSX.scratchMode = [true, true, true, true];
+// Keep scratch active while the platter is still emitting real movement after touch release.
+// This timer only detects that the MIDI ticks have gone quiet; it never generates movement.
+PioneerDDJSX.jogReleasePollMs = 25;
+PioneerDDJSX.jogReleaseQuietMs = 125;
+PioneerDDJSX.jogReleasePending = [false, false, false, false];
+PioneerDDJSX.jogReleaseTimer = [0, 0, 0, 0];
+PioneerDDJSX.jogReleaseQuietElapsed = [0, 0, 0, 0];
+PioneerDDJSX.jogLastDirection = [0, 0, 0, 0];
+PioneerDDJSX.jogWasPlaying = [false, false, false, false];
 PioneerDDJSX.wheelLedsBlinkStatus = [0, 0, 0, 0];
 PioneerDDJSX.wheelLedsPosition = [0, 0, 0, 0];
 PioneerDDJSX.tempoRanges = [0.08, 0.16, 0.32, 1.00];
@@ -474,6 +483,7 @@ PioneerDDJSX.init = function(id) {
 PioneerDDJSX.shutdown = function() {
     for (var group in PioneerDDJSX.channelGroups) {
         if (PioneerDDJSX.channelGroups.hasOwnProperty(group)) {
+            PioneerDDJSX.releaseJogScratch(PioneerDDJSX.channelGroups[group]);
             PioneerDDJSX.resetDeck(group);
         }
     }
@@ -2119,14 +2129,98 @@ PioneerDDJSX.getJogWheelDelta = function(value) {
 };
 
 PioneerDDJSX.jogRingTick = function(channel, control, value, status, group) {
-    PioneerDDJSX.pitchBendFromJog(group, PioneerDDJSX.getJogWheelDelta(value));
+    var deck = PioneerDDJSX.channelGroups[group];
+    if (PioneerDDJSX.scratchMode[deck] &&
+            PioneerDDJSX.jogReleasePending[deck] &&
+            engine.isScratching(deck + 1)) {
+        engine.scratchTick(deck + 1, PioneerDDJSX.getJogWheelDelta(value));
+        PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
+    } else {
+        PioneerDDJSX.pitchBendFromJog(group, PioneerDDJSX.getJogWheelDelta(value));
+    }
 };
 
 PioneerDDJSX.jogRingTickShift = function(channel, control, value, status, group) {
-    PioneerDDJSX.pitchBendFromJog(
-        group,
-        PioneerDDJSX.getJogWheelDelta(value) * PioneerDDJSX.jogwheelShiftMultiplier
+    var deck = PioneerDDJSX.channelGroups[group];
+    if (PioneerDDJSX.scratchMode[deck] &&
+            PioneerDDJSX.jogReleasePending[deck] &&
+            engine.isScratching(deck + 1)) {
+        engine.scratchTick(deck + 1, PioneerDDJSX.getJogWheelDelta(value));
+        PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
+    } else {
+        PioneerDDJSX.pitchBendFromJog(
+            group,
+            PioneerDDJSX.getJogWheelDelta(value) * PioneerDDJSX.jogwheelShiftMultiplier
+        );
+    }
+};
+
+PioneerDDJSX.cancelJogRelease = function(deck) {
+    if (PioneerDDJSX.jogReleaseTimer[deck]) {
+        engine.stopTimer(PioneerDDJSX.jogReleaseTimer[deck]);
+        PioneerDDJSX.jogReleaseTimer[deck] = 0;
+    }
+    PioneerDDJSX.jogReleasePending[deck] = false;
+    PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+};
+
+PioneerDDJSX.releaseJogScratch = function(deck) {
+    PioneerDDJSX.cancelJogRelease(deck);
+    if (engine.isScratching(deck + 1)) {
+        engine.scratchDisable(deck + 1, true);
+    }
+};
+
+PioneerDDJSX.finishJogRelease = function(deck) {
+    var timer = PioneerDDJSX.jogReleaseTimer[deck];
+    PioneerDDJSX.jogReleaseTimer[deck] = 0;
+    if (!PioneerDDJSX.jogReleasePending[deck]) {
+        return;
+    }
+    PioneerDDJSX.jogReleasePending[deck] = false;
+    PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+    if (timer) {
+        engine.stopTimer(timer);
+    }
+    if (engine.isScratching(deck + 1)) {
+        var wasPlaying = PioneerDDJSX.jogWasPlaying[deck];
+        var backward = PioneerDDJSX.jogLastDirection[deck] < 0;
+        var group = "[Channel" + (deck + 1) + "]";
+        if (backward && wasPlaying) {
+            // scratchDisable latches its target from the current play state.
+            // Briefly expose the stopped state so the real backward tail ramps
+            // to zero, then restore play while scratch still owns the rate.
+            engine.setValue(group, "play", 0);
+        }
+        engine.scratchDisable(deck + 1, true);
+        if (backward && wasPlaying) {
+            engine.setValue(group, "play", 1);
+        }
+    }
+};
+
+PioneerDDJSX.scheduleJogRelease = function(deck) {
+    PioneerDDJSX.cancelJogRelease(deck);
+    PioneerDDJSX.jogReleasePending[deck] = true;
+    PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+    PioneerDDJSX.jogReleaseTimer[deck] = engine.beginTimer(
+        PioneerDDJSX.jogReleasePollMs,
+        function() {
+            PioneerDDJSX.jogReleaseQuietElapsed[deck] += PioneerDDJSX.jogReleasePollMs;
+            if (PioneerDDJSX.jogReleaseQuietElapsed[deck] >= PioneerDDJSX.jogReleaseQuietMs) {
+                PioneerDDJSX.finishJogRelease(deck);
+            }
+        }
     );
+};
+
+PioneerDDJSX.noteJogReleaseMovement = function(deck, movement) {
+    if (movement) {
+        PioneerDDJSX.jogLastDirection[deck] = movement > 0 ? 1 : -1;
+    }
+    if (PioneerDDJSX.jogReleasePending[deck]) {
+        PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+    }
 };
 
 PioneerDDJSX.jogPlatterTick = function(channel, control, value, status, group) {
@@ -2153,6 +2247,9 @@ PioneerDDJSX.jogPlatterTick = function(channel, control, value, status, group) {
 
     if (PioneerDDJSX.scratchMode[deck] && engine.isScratching(deck + 1)) {
         engine.scratchTick(deck + 1, PioneerDDJSX.getJogWheelDelta(value));
+        if (PioneerDDJSX.jogReleasePending[deck]) {
+            PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
+        }
     } else {
         PioneerDDJSX.pitchBendFromJog(group, PioneerDDJSX.getJogWheelDelta(value));
     }
@@ -2163,6 +2260,9 @@ PioneerDDJSX.jogPlatterTickShift = function(channel, control, value, status, gro
 
     if (PioneerDDJSX.scratchMode[deck] && engine.isScratching(deck + 1)) {
         engine.scratchTick(deck + 1, PioneerDDJSX.getJogWheelDelta(value));
+        if (PioneerDDJSX.jogReleasePending[deck]) {
+            PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
+        }
     } else {
         PioneerDDJSX.pitchBendFromJog(
             group,
@@ -2176,16 +2276,21 @@ PioneerDDJSX.jogTouch = function(channel, control, value, status, group) {
 
     if (PioneerDDJSX.scratchMode[deck]) {
         if (value) {
-            engine.scratchEnable(
-                deck + 1,
-                PioneerDDJSX.scratchSettings.jogResolution,
-                PioneerDDJSX.scratchSettings.vinylSpeed,
-                PioneerDDJSX.scratchSettings.alpha,
-                PioneerDDJSX.scratchSettings.beta,
-                true
-            );
-        } else {
-            engine.scratchDisable(deck + 1, true);
+            PioneerDDJSX.cancelJogRelease(deck);
+            PioneerDDJSX.jogLastDirection[deck] = 0;
+            PioneerDDJSX.jogWasPlaying[deck] = engine.getValue(group, "play") > 0;
+            if (!engine.isScratching(deck + 1)) {
+                engine.scratchEnable(
+                    deck + 1,
+                    PioneerDDJSX.scratchSettings.jogResolution,
+                    PioneerDDJSX.scratchSettings.vinylSpeed,
+                    PioneerDDJSX.scratchSettings.alpha,
+                    PioneerDDJSX.scratchSettings.beta,
+                    true
+                );
+            }
+        } else if (engine.isScratching(deck + 1)) {
+            PioneerDDJSX.scheduleJogRelease(deck);
         }
     }
 };
@@ -2193,6 +2298,9 @@ PioneerDDJSX.jogTouch = function(channel, control, value, status, group) {
 PioneerDDJSX.toggleScratch = function(channel, control, value, status, group) {
     var deck = PioneerDDJSX.channelGroups[group];
     if (value) {
+        if (PioneerDDJSX.scratchMode[deck]) {
+            PioneerDDJSX.releaseJogScratch(deck);
+        }
         PioneerDDJSX.scratchMode[deck] = !PioneerDDJSX.scratchMode[deck];
         PioneerDDJSX.triggerVinylLed(deck);
     }

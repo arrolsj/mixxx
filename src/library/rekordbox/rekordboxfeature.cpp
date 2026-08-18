@@ -58,6 +58,8 @@ constexpr quint32 kPdbTablePointerSize = 16;
 constexpr quint32 kMinimumPdbPageSize = 40;
 constexpr quint32 kDeviceNameOffsetInHistoryRow = 30;
 constexpr int kMaximumPlaylistDepth = 256;
+constexpr int kSafeStopReferenceReleaseCheckIntervalMillis = 20;
+constexpr int kSafeStopReferenceReleaseTimeoutMillis = 5000;
 
 QString treeItemDevicePath(const TreeItem* pItem) {
     const QVariantList data = pItem ? pItem->getData().toList() : QVariantList{};
@@ -1086,7 +1088,7 @@ void setHotCue(TrackPointer track,
         const QString& label,
         mixxx::RgbColor::optional_t color) {
     CuePointer pCue;
-    const QList<CuePointer> cuePoints = track->getCuePoints();
+    const QList<CuePointer> cuePoints = track->getCuePointsForPlayback();
     for (const CuePointer& trackCue : cuePoints) {
         if (trackCue->getHotCue() == id) {
             pCue = trackCue;
@@ -1484,6 +1486,11 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
         return track;
     }
 
+    // Rekordbox cues are a transient playback session. Keep embedded Serato
+    // and native Mixxx cues in the Track's persistent cue list, but exclude
+    // them from playback controls and UI while this Rekordbox track is used.
+    track->beginRekordboxCueSession();
+
     // The following code accounts for timing offsets required to
     // correctly align timing information (cue points, loops, beatgrids)
     // exported from Rekordbox. This is caused by different MP3
@@ -1665,6 +1672,42 @@ RekordboxFeature::RekordboxFeature(
             &mixxx::removablemedia::IRemovableMediaService::safeStopFinished,
             this,
             &RekordboxFeature::onSafeStopFinished);
+    m_safeStopReferenceReleaseTimer.setInterval(
+            kSafeStopReferenceReleaseCheckIntervalMillis);
+    connect(&m_safeStopReferenceReleaseTimer,
+            &QTimer::timeout,
+            this,
+            [this] {
+                if (m_safeStopReferencesReleased &&
+                        m_safeStopReferencesReleased()) {
+                    m_safeStopReferenceReleaseTimer.stop();
+                    m_safeStopReferencesReleased = {};
+                    auto requestPlatformSafeStop =
+                            std::move(m_pendingSafeStopPlatformRequest);
+                    m_pendingSafeStopPlatformRequest = {};
+                    if (requestPlatformSafeStop) {
+                        requestPlatformSafeStop();
+                    }
+                    return;
+                }
+                if (!m_safeStopReferenceReleaseElapsed.hasExpired(
+                            kSafeStopReferenceReleaseTimeoutMillis)) {
+                    return;
+                }
+
+                m_safeStopReferenceReleaseTimer.stop();
+                m_safeStopReferencesReleased = {};
+                m_pendingSafeStopPlatformRequest = {};
+                mixxx::removablemedia::SafeStopResult result;
+                result.deviceId = m_safeStopOperationDeviceId;
+                result.state = mixxx::removablemedia::MediaState::Failed;
+                result.errorCode =
+                        mixxx::removablemedia::ErrorCode::TimedOut;
+                result.errorMessage = tr(
+                        "Mixxx could not release all loaded tracks before "
+                        "the safe-stop deadline.");
+                onSafeStopFinished(result);
+            });
     // initialize the model
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
     m_pRemovableMediaService->requestRescan();
@@ -1871,7 +1914,9 @@ bool RekordboxFeature::isSafeStopActiveFor(
 
 bool RekordboxFeature::requestSafeStop(
         const QString& deviceId,
-        quint64 expectedGeneration) {
+        quint64 expectedGeneration,
+        const std::function<void()>& releaseMediaReferences,
+        const std::function<bool()>& mediaReferencesReleased) {
     if (!m_safeStopOperationDeviceId.isEmpty()) {
         if (deviceId == m_safeStopOperationDeviceId) {
             // The public API has no operation token. Treat a repeated request
@@ -1952,9 +1997,29 @@ bool RekordboxFeature::requestSafeStop(
             device.busyReason.clear();
         }
     }
+    // The LOAD gates above must be held before releasing players, while the
+    // platform request must not start until all Mixxx file handles have been
+    // closed. The Library supplies these callbacks to stop and eject only
+    // players that reference the selected physical removal group and then
+    // verify their asynchronous readers have acknowledged TRACK_UNLOADED.
+    if (releaseMediaReferences) {
+        releaseMediaReferences();
+    }
     emit devicesChanged();
-    return m_pRemovableMediaService->requestSafeStop(
-            deviceId, expectedGeneration);
+    auto requestPlatformSafeStop = [this, deviceId, expectedGeneration] {
+        return m_pRemovableMediaService->requestSafeStop(
+                deviceId, expectedGeneration);
+    };
+    if (!mediaReferencesReleased || mediaReferencesReleased()) {
+        return requestPlatformSafeStop();
+    }
+
+    m_safeStopReferencesReleased = mediaReferencesReleased;
+    m_pendingSafeStopPlatformRequest =
+            std::move(requestPlatformSafeStop);
+    m_safeStopReferenceReleaseElapsed.start();
+    m_safeStopReferenceReleaseTimer.start();
+    return true;
 }
 
 void RekordboxFeature::rejectSafeStop(
@@ -2019,6 +2084,9 @@ void RekordboxFeature::onSafeStopFinished(
     }
     emit safeStopFinished(result);
     if (completedAcceptedOperation) {
+        m_safeStopReferenceReleaseTimer.stop();
+        m_safeStopReferencesReleased = {};
+        m_pendingSafeStopPlatformRequest = {};
         // Keep every LOAD/STOP gate and the operation correlation token live
         // through all terminal model and result notifications. Reentrant
         // observers must not be able to start a new load or physical stop

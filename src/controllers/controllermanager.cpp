@@ -423,6 +423,14 @@ void ControllerManager::setUpDevices(bool refreshPortMidiOnly) {
     m_pendingReconnectDeviceNames.unite(configuredDeviceNames);
     m_pendingReconnectDeviceNames.subtract(openDeviceNames);
     m_audioGatedReconnectDeviceNames.intersect(m_pendingReconnectDeviceNames);
+    const QSet<QString> newlyUnavailableDeviceNames =
+            m_pendingReconnectDeviceNames - reconnectNamesAtStart;
+    for (const QString& deviceName : newlyUnavailableDeviceNames) {
+        qInfo() << "Configured controller is unavailable; scheduling audio "
+                   "recovery while controller discovery continues:"
+                << deviceName;
+        emit controllerDeviceDisconnected(deviceName);
+    }
     for (const QString& deviceName : reconnectNamesAtStart) {
         if (!m_pendingReconnectDeviceNames.contains(deviceName)) {
             qInfo() << "Controller device reconnected:" << deviceName;

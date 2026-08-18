@@ -62,6 +62,17 @@ constexpr int kMaxBeatsUndoStack = 10;
 // Used to filter actions done in quick succession.
 constexpr int kQuickBeatChangeDeltaMillis = 800;
 
+bool isRekordboxSessionCueType(mixxx::CueType type) {
+    switch (type) {
+    case mixxx::CueType::HotCue:
+    case mixxx::CueType::Loop:
+    case mixxx::CueType::MemoryCue:
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // anonymous namespace
 
 // Don't change this string without an entry in the CHANGELOG!
@@ -91,6 +102,7 @@ Track::Track(
           m_record(trackId),
           m_bDirty(false),
           m_bMarkedForMetadataExport(false),
+          m_rekordboxCueSessionActive(false),
           m_undoingBeatsChange(false) {
     if (kLogStats && kLogger.debugEnabled()) {
         long numberOfInstancesBefore = s_numberOfInstances.fetch_add(1);
@@ -1003,6 +1015,34 @@ void Track::slotCueUpdated() {
     emit cuesUpdated();
 }
 
+QList<CuePointer> Track::getCuePointsForPlayback() const {
+    const QMutexLocker lock(&m_qMutex);
+    if (!m_rekordboxCueSessionActive) {
+        return m_cuePoints;
+    }
+
+    QList<CuePointer> cuePoints;
+    cuePoints.reserve(m_cuePoints.size() + m_rekordboxSessionCuePoints.size());
+    for (const auto& pCue : m_cuePoints) {
+        if (!isRekordboxSessionCueType(pCue->getType())) {
+            cuePoints.append(pCue);
+        }
+    }
+    cuePoints.append(m_rekordboxSessionCuePoints);
+    return cuePoints;
+}
+
+void Track::beginRekordboxCueSession() {
+    auto locked = lockMutex(&m_qMutex);
+    for (const auto& pCue : std::as_const(m_rekordboxSessionCuePoints)) {
+        disconnect(pCue.get(), nullptr, this, nullptr);
+    }
+    m_rekordboxSessionCuePoints.clear();
+    m_rekordboxCueSessionActive = true;
+    locked.unlock();
+    emit cuesUpdated();
+}
+
 CuePointer Track::createAndAddCue(
         mixxx::CueType type,
         int hotCueIndex,
@@ -1026,11 +1066,22 @@ CuePointer Track::createAndAddCue(
     // associated Cue objects should always live on the
     // same thread as their host, namely this->thread().
     pCue->moveToThread(thread());
+    auto locked = lockMutex(&m_qMutex);
+    if (m_rekordboxCueSessionActive && isRekordboxSessionCueType(type)) {
+        connect(pCue.get(),
+                &Cue::updated,
+                this,
+                &Track::cuesUpdated);
+        m_rekordboxSessionCuePoints.push_back(pCue);
+        locked.unlock();
+        emit cuesUpdated();
+        return pCue;
+    }
+
     connect(pCue.get(),
             &Cue::updated,
             this,
             &Track::slotCueUpdated);
-    auto locked = lockMutex(&m_qMutex);
     m_cuePoints.push_back(pCue);
     markDirtyAndUnlock(&locked);
     emit cuesUpdated();
@@ -1068,6 +1119,12 @@ void Track::removeCue(const CuePointer& pCue) {
     }
 
     auto locked = lockMutex(&m_qMutex);
+    if (m_rekordboxSessionCuePoints.removeOne(pCue)) {
+        disconnect(pCue.get(), nullptr, this, nullptr);
+        locked.unlock();
+        emit cuesUpdated();
+        return;
+    }
     disconnect(pCue.get(), nullptr, this, nullptr);
     m_cuePoints.removeOne(pCue);
     if (pCue->getType() == mixxx::CueType::MainCue) {
@@ -1079,6 +1136,24 @@ void Track::removeCue(const CuePointer& pCue) {
 
 void Track::removeCuesOfType(mixxx::CueType type) {
     auto locked = lockMutex(&m_qMutex);
+    if (m_rekordboxCueSessionActive && isRekordboxSessionCueType(type)) {
+        bool removed = false;
+        QMutableListIterator<CuePointer> sessionIt(m_rekordboxSessionCuePoints);
+        while (sessionIt.hasNext()) {
+            CuePointer pCue = sessionIt.next();
+            if (pCue->getType() == type) {
+                disconnect(pCue.get(), nullptr, this, nullptr);
+                sessionIt.remove();
+                removed = true;
+            }
+        }
+        locked.unlock();
+        if (removed) {
+            emit cuesUpdated();
+        }
+        return;
+    }
+
     bool dirty = false;
     QMutableListIterator<CuePointer> it(m_cuePoints);
     while (it.hasNext()) {

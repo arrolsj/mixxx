@@ -326,6 +326,14 @@ class Track : public QObject {
         return m_cuePoints;
     }
 
+    /// Return the cues that should be exposed to playback controls and UI.
+    ///
+    /// Rekordbox cues are loaded into a transient, non-persistent session so
+    /// embedded Serato and native Mixxx cues remain untouched while Rekordbox
+    /// hot cues and memory cues exclusively drive the current playback view.
+    QList<CuePointer> getCuePointsForPlayback() const;
+    void beginRekordboxCueSession();
+
     void setCuePoints(const QList<CuePointer>& cuePoints);
 
     enum class ImportStatus {
@@ -566,6 +574,11 @@ class Track : public QObject {
 
     // The list of cue points for the track
     QList<CuePointer> m_cuePoints;
+
+    // Rekordbox cues are session-only. They must never be written to the Mixxx
+    // database or exported back into embedded metadata.
+    QList<CuePointer> m_rekordboxSessionCuePoints;
+    bool m_rekordboxCueSessionActive;
 
     // Storage for the track's beats
     mixxx::BeatsPointer m_pBeats;

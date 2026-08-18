@@ -255,6 +255,17 @@ void CachingReader::process() {
         } else {
             // State update (without a chunk)
             if (update.status == TRACK_LOADED) {
+                if (m_state.loadAcquire() == STATE_TRACK_UNLOADING) {
+                    // An eject may overtake a load while the worker is still
+                    // opening the SoundSource. The worker serializes both
+                    // requests and will report TRACK_UNLOADED next. Discard
+                    // this stale load acknowledgement without briefly
+                    // exposing the source as loaded.
+                    if (m_mruCachingReaderChunk || m_lruCachingReaderChunk) {
+                        freeAllChunks();
+                    }
+                    continue;
+                }
                 // We have a new Track ready to go.
                 // Assert that we either have had STATE_TRACK_LOADING before and all
                 // chunks in the m_readerStatusUpdateFIFO have been discarded.

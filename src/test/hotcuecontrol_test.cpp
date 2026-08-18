@@ -233,6 +233,62 @@ TEST_F(HotcueControlTest, SetCueAuto) {
                          .isValid());
 }
 
+TEST_F(HotcueControlTest, RekordboxCueSessionDrivesPadsWithoutChangingPersistentCue) {
+    TrackPointer pTrack = createTestTrack();
+    constexpr mixxx::audio::FramePos seratoHotcuePosition(100);
+    constexpr mixxx::audio::FramePos rekordboxHotcuePosition(200);
+    constexpr mixxx::audio::FramePos replacementHotcuePosition(300);
+
+    const CuePointer pSeratoHotcue = pTrack->createAndAddCue(
+            mixxx::CueType::HotCue,
+            0,
+            seratoHotcuePosition,
+            mixxx::audio::kInvalidFramePos);
+    pTrack->beginRekordboxCueSession();
+    const CuePointer pRekordboxHotcue = pTrack->createAndAddCue(
+            mixxx::CueType::HotCue,
+            0,
+            rekordboxHotcuePosition,
+            mixxx::audio::kInvalidFramePos);
+
+    loadTrack(pTrack);
+
+    EXPECT_DOUBLE_EQ(
+            static_cast<double>(HotcueControl::Status::Set),
+            m_pHotcue1Status->get());
+    EXPECT_FRAMEPOS_EQ_CONTROL(rekordboxHotcuePosition, m_pHotcue1Position);
+
+    setCurrentFramePosition(mixxx::audio::kStartFramePos);
+    m_pHotcue1Goto->set(1);
+    m_pHotcue1Goto->set(0);
+    ProcessBuffer();
+    EXPECT_FRAMEPOS_EQ(rekordboxHotcuePosition, currentFramePosition());
+
+    m_pHotcue1Clear->set(1);
+    m_pHotcue1Clear->set(0);
+    EXPECT_DOUBLE_EQ(
+            static_cast<double>(HotcueControl::Status::Empty),
+            m_pHotcue1Status->get());
+
+    auto persistentCues = pTrack->getCuePoints();
+    ASSERT_EQ(1, persistentCues.size());
+    EXPECT_EQ(pSeratoHotcue, persistentCues.first());
+    EXPECT_FALSE(pTrack->getCuePointsForPlayback().contains(pRekordboxHotcue));
+
+    m_pQuantizeEnabled->set(0);
+    setCurrentFramePosition(replacementHotcuePosition);
+    m_pHotcue1Set->set(1);
+    m_pHotcue1Set->set(0);
+
+    EXPECT_DOUBLE_EQ(
+            static_cast<double>(HotcueControl::Status::Set),
+            m_pHotcue1Status->get());
+    EXPECT_FRAMEPOS_EQ_CONTROL(replacementHotcuePosition, m_pHotcue1Position);
+    persistentCues = pTrack->getCuePoints();
+    ASSERT_EQ(1, persistentCues.size());
+    EXPECT_EQ(pSeratoHotcue, persistentCues.first());
+}
+
 TEST_F(HotcueControlTest, SetCueManual) {
     createAndLoadFakeTrack();
 

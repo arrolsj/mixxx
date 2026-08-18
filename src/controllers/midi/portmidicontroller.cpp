@@ -4,6 +4,11 @@
 #include <windows.h>
 #endif
 
+#if defined(__LINUX__)
+#include <QFile>
+#include <QSet>
+#endif
+
 #include "controllers/midi/midiutils.h"
 #include "moc_portmidicontroller.cpp"
 
@@ -358,9 +363,76 @@ bool PortMidiController::isNativeDevicePresent() const {
             !winMmOutputDevicePresent(m_outputDeviceName)) {
         return false;
     }
+#elif defined(__LINUX__)
+    const auto isAlsaInterface = [](const QString& deviceInterface) {
+        return deviceInterface.compare(
+                       QStringLiteral("ALSA"), Qt::CaseInsensitive) == 0;
+    };
+
+    QStringList expectedPortNames;
+    if (isInputDevice() && isAlsaInterface(m_inputDeviceInterface) &&
+            !m_inputDeviceName.isEmpty()) {
+        expectedPortNames.append(m_inputDeviceName);
+    }
+    if (isOutputDevice() && isAlsaInterface(m_outputDeviceInterface) &&
+            !m_outputDeviceName.isEmpty() &&
+            !expectedPortNames.contains(
+                    m_outputDeviceName, Qt::CaseInsensitive)) {
+        expectedPortNames.append(m_outputDeviceName);
+    }
+    if (!expectedPortNames.isEmpty()) {
+        QFile topologyFile(QStringLiteral("/proc/asound/seq/clients"));
+        if (!topologyFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            // Fail open if the ALSA topology cannot be inspected. PortMidi
+            // errors can still report a disconnect, while a false negative
+            // here would unnecessarily close every active Linux controller.
+            return true;
+        }
+        return linuxAlsaTopologyContainsPorts(
+                topologyFile.readAll(), expectedPortNames);
+    }
 #endif
     return true;
 }
+
+#if defined(__LINUX__)
+bool PortMidiController::linuxAlsaTopologyContainsPorts(
+        const QByteArray& topology,
+        const QStringList& expectedPortNames) {
+    QSet<QString> missingPortNames;
+    for (const QString& expectedPortName : expectedPortNames) {
+        if (!expectedPortName.isEmpty()) {
+            missingPortNames.insert(expectedPortName.toCaseFolded());
+        }
+    }
+    if (missingPortNames.isEmpty()) {
+        return true;
+    }
+
+    const QList<QByteArray> lines = topology.split('\n');
+    for (const QByteArray& rawLine : lines) {
+        const QByteArray line = rawLine.trimmed();
+        if (!line.startsWith("Port ")) {
+            continue;
+        }
+        const qsizetype firstQuote = line.indexOf('"');
+        const qsizetype secondQuote =
+                firstQuote >= 0 ? line.indexOf('"', firstQuote + 1) : -1;
+        if (firstQuote < 0 || secondQuote <= firstQuote + 1) {
+            continue;
+        }
+        const QString portName =
+                QString::fromLocal8Bit(line.mid(
+                        firstQuote + 1, secondQuote - firstQuote - 1))
+                        .toCaseFolded();
+        missingPortNames.remove(portName);
+        if (missingPortNames.isEmpty()) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 
 void PortMidiController::sendShortMsg(unsigned char status, unsigned char byte1,
                                       unsigned char byte2) {

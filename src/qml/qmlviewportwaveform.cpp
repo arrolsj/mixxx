@@ -48,6 +48,24 @@ mixxx::waveform::WaveformRgbColorF toColorF(const QColor& color) {
     };
 }
 
+struct PremultipliedColor {
+    uchar red;
+    uchar green;
+    uchar blue;
+    uchar alpha;
+};
+
+PremultipliedColor toPremultipliedColor(const QColor& color, double opacity) {
+    const int alpha = std::clamp(
+            static_cast<int>(std::lround(color.alpha() * opacity)), 0, 255);
+    return {
+            static_cast<uchar>(color.red() * alpha / 255),
+            static_cast<uchar>(color.green() * alpha / 255),
+            static_cast<uchar>(color.blue() * alpha / 255),
+            static_cast<uchar>(alpha),
+    };
+}
+
 } // namespace
 
 namespace mixxx::qml {
@@ -209,6 +227,45 @@ void QmlViewportWaveform::setLowColor(const QColor& color) {
     update();
 }
 
+bool QmlViewportWaveform::beatGridVisible() const {
+    return m_beatGridVisible;
+}
+
+void QmlViewportWaveform::setBeatGridVisible(bool visible) {
+    if (m_beatGridVisible == visible) {
+        return;
+    }
+    m_beatGridVisible = visible;
+    emit beatGridVisibleChanged();
+    update();
+}
+
+QColor QmlViewportWaveform::beatColor() const {
+    return m_beatColor;
+}
+
+void QmlViewportWaveform::setBeatColor(const QColor& color) {
+    if (m_beatColor == color) {
+        return;
+    }
+    m_beatColor = color;
+    emit beatColorChanged();
+    update();
+}
+
+QColor QmlViewportWaveform::downbeatColor() const {
+    return m_downbeatColor;
+}
+
+void QmlViewportWaveform::setDownbeatColor(const QColor& color) {
+    if (m_downbeatColor == color) {
+        return;
+    }
+    m_downbeatColor = color;
+    emit downbeatColorChanged();
+    update();
+}
+
 double QmlViewportWaveform::trackWidth() const {
     return m_viewportMetrics.trackWidth;
 }
@@ -244,8 +301,13 @@ void QmlViewportWaveform::setCurrentTrack(TrackPointer pTrack) {
                 &Track::waveformUpdated,
                 this,
                 &QmlViewportWaveform::slotWaveformUpdated);
+        connect(m_pCurrentTrack.get(),
+                &Track::beatsUpdated,
+                this,
+                &QmlViewportWaveform::slotBeatsUpdated);
     }
     slotWaveformUpdated();
+    slotBeatsUpdated();
 }
 
 void QmlViewportWaveform::slotWaveformUpdated() {
@@ -253,6 +315,19 @@ void QmlViewportWaveform::slotWaveformUpdated() {
             ? m_pCurrentTrack->getWaveform()
             : ConstWaveformPointer{};
     updateViewportMetrics();
+    update();
+}
+
+void QmlViewportWaveform::slotBeatsUpdated() {
+    if (m_pCurrentTrack != nullptr) {
+        m_trackEndPosition = audio::FramePos{
+                m_pCurrentTrack->getDuration() * m_pCurrentTrack->getSampleRate()};
+        m_beatGridData = waveform::buildWaveformBeatGridData(
+                m_pCurrentTrack->getBeats(), m_trackEndPosition);
+    } else {
+        m_beatGridData = {};
+        m_trackEndPosition = audio::kStartFramePos;
+    }
     update();
 }
 
@@ -339,6 +414,17 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
         return nullptr;
     }
 
+    const std::vector<waveform::WaveformBeatGridLine> beatGridLines =
+            m_beatGridVisible
+            ? waveform::sampleWaveformBeatGridLines(m_beatGridData,
+                      m_trackEndPosition,
+                      viewport,
+                      m_devicePixelRatio)
+            : std::vector<waveform::WaveformBeatGridLine>{};
+    const std::size_t beatGridRectangleCount =
+            waveform::waveformBeatGridDashCount(
+                    beatGridLines, height(), m_devicePixelRatio);
+
     auto* pNode = static_cast<QSGGeometryNode*>(pOldNode);
     if (pNode == nullptr) {
         pNode = new QSGGeometryNode();
@@ -348,14 +434,17 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
         pGeometry->setVertexDataPattern(QSGGeometry::DynamicPattern);
         pNode->setGeometry(pGeometry);
         pNode->setFlag(QSGNode::OwnsGeometry);
-        pNode->setMaterial(new QSGVertexColorMaterial());
+        auto* pMaterial = new QSGVertexColorMaterial();
+        pMaterial->setFlag(QSGMaterial::Blending, true);
+        pNode->setMaterial(pMaterial);
         pNode->setFlag(QSGNode::OwnsMaterial);
     }
 
     QSGGeometry* pGeometry = pNode->geometry();
     constexpr int kVerticesPerRectangle = 6;
     const int vertexCount = kVerticesPerRectangle *
-            (static_cast<int>(columns.size()) + 1);
+            (static_cast<int>(beatGridRectangleCount) +
+                    static_cast<int>(columns.size()) + 1);
     if (pGeometry->vertexCount() != vertexCount) {
         pGeometry->allocate(vertexCount);
     }
@@ -363,6 +452,33 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
     QSGGeometry::ColoredPoint2D* pVertices =
             pGeometry->vertexDataAsColoredPoint2D();
     int vertexIndex = 0;
+    const float logicalHeight = static_cast<float>(height());
+    const float beatGridStrokeWidth =
+            static_cast<float>(2.0 / m_devicePixelRatio);
+    for (const auto& line : beatGridLines) {
+        const PremultipliedColor color = toPremultipliedColor(
+                line.isDownbeat ? m_downbeatColor : m_beatColor,
+                line.isDownbeat ? 0.9 : 0.65);
+        const float dashLength = beatGridStrokeWidth *
+                (line.isDownbeat ? 4.0f : 3.0f);
+        const float dashPeriod = dashLength + beatGridStrokeWidth * 3.0f;
+        const int dashCount = waveform::waveformBeatGridDashCount(
+                height(), m_devicePixelRatio, line.isDownbeat);
+        for (int dash = 0; dash < dashCount; ++dash) {
+            const float top = dash * dashPeriod;
+            addRectangle(pVertices,
+                    &vertexIndex,
+                    line.x - beatGridStrokeWidth / 2.0f,
+                    top,
+                    line.x + beatGridStrokeWidth / 2.0f,
+                    std::min(top + dashLength, logicalHeight),
+                    color.red,
+                    color.green,
+                    color.blue,
+                    color.alpha);
+        }
+    }
+
     const float logicalWidth = static_cast<float>(
             viewport.physicalWidth / m_devicePixelRatio);
     const float halfHeight = static_cast<float>(height() / 2.0);

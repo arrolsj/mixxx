@@ -5,8 +5,8 @@ Item {
     id: root
 
     property color color: "#F8A030"
-    property real markerWidth: 10
-    property real markerHeight: 8
+    property real markerWidth: 14
+    property real markerHeight: 11
 
     Rectangle {
         x: Math.round((root.width - width) / 2)

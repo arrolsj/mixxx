@@ -104,7 +104,13 @@ EngineChannel::ActiveState EngineDeck::updateActiveState() {
     if (m_bPassthroughWasActive && !m_bPassthroughIsActive) {
         active = true;
     } else {
-        active = m_pBuffer->isTrackLoaded() || isPassthroughActive();
+        // Keep processing after an eject until CachingReader has consumed the
+        // worker's TRACK_UNLOADED acknowledgement. Otherwise the deck becomes
+        // inactive after one callback and a slightly delayed file-close
+        // acknowledgement can remain unread indefinitely.
+        active = m_pBuffer->isTrackLoaded() ||
+                !m_pBuffer->isTrackReaderIdle() ||
+                isPassthroughActive();
     }
 
     if (active) {

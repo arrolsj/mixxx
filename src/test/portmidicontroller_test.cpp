@@ -131,6 +131,15 @@ class PortMidiControllerTest : public MixxxTest {
         return m_pController->hasDisconnected();
     }
 
+#if defined(__LINUX__)
+    bool linuxAlsaTopologyContainsPorts(
+            const QByteArray& topology,
+            const QStringList& expectedPortNames) const {
+        return PortMidiController::linuxAlsaTopologyContainsPorts(
+                topology, expectedPortNames);
+    }
+#endif
+
     PmDeviceInfo m_inputDeviceInfo;
     PmDeviceInfo m_outputDeviceInfo;
     MockPortMidiDevice* m_mockInput;
@@ -347,6 +356,37 @@ TEST_F(PortMidiControllerTest, Poll_NativePresenceCheckIsThrottled) {
     EXPECT_EQ(1, m_pController->nativePresenceCheckCount());
     EXPECT_FALSE(deviceDisconnected());
 }
+
+#if defined(__LINUX__)
+TEST_F(PortMidiControllerTest,
+        LinuxAlsaTopologyRequiresMatchingSequencerPorts) {
+    const QByteArray topology = R"(
+Client  24 : "PIONEER DJ DDJ-SX3" [Kernel Legacy]
+  Port   0 : "PIONEER DJ DDJ-SX3 MIDI 1" (RWeX) [In/Out]
+Client  25 : "Other controller" [Kernel Legacy]
+  Port   0 : "Other controller MIDI 1" (RWeX) [In/Out]
+)";
+
+    EXPECT_TRUE(linuxAlsaTopologyContainsPorts(
+            topology, {QStringLiteral("PIONEER DJ DDJ-SX3 MIDI 1")}));
+    EXPECT_TRUE(linuxAlsaTopologyContainsPorts(
+            topology,
+            {QStringLiteral("pioneer dj ddj-sx3 midi 1"),
+                    QStringLiteral("OTHER CONTROLLER MIDI 1")}));
+    EXPECT_FALSE(linuxAlsaTopologyContainsPorts(
+            topology, {QStringLiteral("Missing controller MIDI 1")}));
+}
+
+TEST_F(PortMidiControllerTest,
+        LinuxAlsaTopologyDoesNotTreatClientNameAsPortPresence) {
+    const QByteArray topology = R"(
+Client  24 : "PIONEER DJ DDJ-SX3 MIDI 1" [Kernel Legacy]
+)";
+
+    EXPECT_FALSE(linuxAlsaTopologyContainsPorts(
+            topology, {QStringLiteral("PIONEER DJ DDJ-SX3 MIDI 1")}));
+}
+#endif
 
 TEST_F(PortMidiControllerTest, Poll_BufferOverflowDoesNotMarkControllerDisconnected) {
     EXPECT_CALL(*m_mockInput, isOpen())

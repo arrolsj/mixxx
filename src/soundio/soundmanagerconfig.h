@@ -64,6 +64,7 @@ class SoundManagerConfig {
     static const int kDefaultSyncBuffers;
 
     bool readFromDisk();
+    bool readFromDiskIncludingUnavailableDevices();
     bool writeToDisk() const;
     QString getAPI() const;
     void setAPI(const QString& api);
@@ -97,6 +98,8 @@ class SoundManagerConfig {
     void loadDefaults(SoundManager* soundManager, unsigned int flags);
 
   private:
+    bool readFromDiskImpl(bool includeUnavailableDevices);
+
     QFileInfo m_configFile;
     QString m_api;
     // none of our sample rates are actually decimals, this avoids

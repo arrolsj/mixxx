@@ -642,6 +642,10 @@ void EngineBuffer::ejectTrack() {
     m_pChannelToCloneFrom = nullptr;
 }
 
+bool EngineBuffer::isTrackReaderIdle() const {
+    return m_pReader->isTrackUnloaded();
+}
+
 void EngineBuffer::notifyTrackLoaded(
         TrackPointer pNewTrack, TrackPointer pOldTrack) {
     m_pRateControl->resetPositionScratchController();

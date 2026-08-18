@@ -7,6 +7,7 @@
 
 #include "qml/qmlplayerproxy.h"
 #include "track/track.h"
+#include "waveform/renderers/waveformbeatgridsampler.h"
 #include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 class QSGNode;
@@ -27,6 +28,11 @@ class QmlViewportWaveform : public QQuickItem {
     Q_PROPERTY(QColor highColor READ highColor WRITE setHighColor NOTIFY highColorChanged)
     Q_PROPERTY(QColor midColor READ midColor WRITE setMidColor NOTIFY midColorChanged)
     Q_PROPERTY(QColor lowColor READ lowColor WRITE setLowColor NOTIFY lowColorChanged)
+    Q_PROPERTY(bool beatGridVisible READ beatGridVisible WRITE setBeatGridVisible
+                    NOTIFY beatGridVisibleChanged)
+    Q_PROPERTY(QColor beatColor READ beatColor WRITE setBeatColor NOTIFY beatColorChanged)
+    Q_PROPERTY(QColor downbeatColor READ downbeatColor WRITE setDownbeatColor
+                    NOTIFY downbeatColorChanged)
     Q_PROPERTY(double trackWidth READ trackWidth NOTIFY trackWidthChanged)
     Q_PROPERTY(double contentX READ contentX NOTIFY contentXChanged)
     QML_NAMED_ELEMENT(ViewportWaveform)
@@ -55,6 +61,12 @@ class QmlViewportWaveform : public QQuickItem {
     void setMidColor(const QColor& color);
     QColor lowColor() const;
     void setLowColor(const QColor& color);
+    bool beatGridVisible() const;
+    void setBeatGridVisible(bool visible);
+    QColor beatColor() const;
+    void setBeatColor(const QColor& color);
+    QColor downbeatColor() const;
+    void setDownbeatColor(const QColor& color);
 
     double trackWidth() const;
     double contentX() const;
@@ -69,6 +81,9 @@ class QmlViewportWaveform : public QQuickItem {
     void highColorChanged();
     void midColorChanged();
     void lowColorChanged();
+    void beatGridVisibleChanged();
+    void beatColorChanged();
+    void downbeatColorChanged();
     void trackWidthChanged();
     void contentXChanged();
 
@@ -83,6 +98,7 @@ class QmlViewportWaveform : public QQuickItem {
     void slotTrackLoading(TrackPointer pNewTrack, TrackPointer pOldTrack);
     void slotTrackUnloaded();
     void slotWaveformUpdated();
+    void slotBeatsUpdated();
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
@@ -91,6 +107,8 @@ class QmlViewportWaveform : public QQuickItem {
     QPointer<QmlPlayerProxy> m_pPlayer;
     TrackPointer m_pCurrentTrack;
     ConstWaveformPointer m_pWaveform;
+    waveform::WaveformBeatGridData m_beatGridData;
+    audio::FramePos m_trackEndPosition{audio::kStartFramePos};
     waveform::WaveformRgbViewportMetrics m_viewportMetrics;
 
     double m_devicePixelRatio{1.0};
@@ -102,6 +120,9 @@ class QmlViewportWaveform : public QQuickItem {
     QColor m_highColor{Qt::blue};
     QColor m_midColor{Qt::green};
     QColor m_lowColor{Qt::red};
+    bool m_beatGridVisible{false};
+    QColor m_beatColor{Qt::white};
+    QColor m_downbeatColor{Qt::white};
 };
 
 } // namespace mixxx::qml

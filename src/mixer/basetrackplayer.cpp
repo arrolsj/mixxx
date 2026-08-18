@@ -333,7 +333,8 @@ void BaseTrackPlayerImpl::loadTrack(TrackPointer pTrack) {
         // For the volatile "most recent loop" the hotcue number will be -1.
         // If no such loop exists, restore a saved loop cue.
         CuePointer pLoopCue;
-        const QList<CuePointer> trackCues = m_pLoadedTrack->getCuePoints();
+        const QList<CuePointer> trackCues =
+                m_pLoadedTrack->getCuePointsForPlayback();
         for (const auto& pCue : trackCues) {
             if (pCue->getType() != mixxx::CueType::Loop) {
                 continue;
@@ -405,6 +406,21 @@ void BaseTrackPlayerImpl::slotEjectTrack(double v) {
     m_pChannel->getEngineBuffer()->ejectTrack();
 }
 
+void BaseTrackPlayerImpl::stopAndEjectTrack() {
+    if (!m_pLoadedTrack) {
+        return;
+    }
+    // EngineBuffer::ejectTrack() stops playback immediately and schedules the
+    // reader to close its SoundSource on the worker thread. Bypass the manual
+    // eject control restrictions for playing and double-clicking.
+    m_pChannel->getEngineBuffer()->ejectTrack();
+}
+
+bool BaseTrackPlayerImpl::isTrackReleased() const {
+    return !m_pLoadedTrack &&
+            m_pChannel->getEngineBuffer()->isTrackReaderIdle();
+}
+
 TrackPointer BaseTrackPlayerImpl::unloadTrack() {
     if (!m_pLoadedTrack) {
         // nothing to do
@@ -422,7 +438,8 @@ TrackPointer BaseTrackPlayerImpl::unloadTrack() {
             mixxx::audio::FramePos::fromEngineSamplePosMaybeInvalid(
                     m_pLoopOutPoint->get());
     CuePointer pLoopCue;
-    const QList<CuePointer> cuePoints = m_pLoadedTrack->getCuePoints();
+    const QList<CuePointer> cuePoints =
+            m_pLoadedTrack->getCuePointsForPlayback();
     for (const auto& pCue : cuePoints) {
         if (pCue->getType() == mixxx::CueType::Loop && pCue->getHotCue() == Cue::kNoHotCue) {
             pLoopCue = pCue;
