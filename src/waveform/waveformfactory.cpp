@@ -23,6 +23,11 @@ WaveformFactory::VersionClass WaveformFactory::waveformVersionToVersionClass(con
         return VC_REMOVE;
     }
 
+    if (version == WAVEFORM_5_VERSION) {
+        // The three-band frequency split and amplitude encoding changed in 6.0.
+        return VC_REMOVE;
+    }
+
     if (version == WAVEFORM_2_VERSION) {
         // keep for use with old Mixxx versions
         return VC_KEEP;
@@ -46,6 +51,11 @@ WaveformFactory::VersionClass WaveformFactory::waveformSummaryVersionToVersionCl
 
     if (version == WAVEFORMSUMMARY_4_VERSION) {
         // Used in Mixxx 1.12 beta, suffers Bug #7776
+        return VC_REMOVE;
+    }
+
+    if (version == WAVEFORMSUMMARY_5_VERSION) {
+        // The three-band frequency split and amplitude encoding changed in 6.0.
         return VC_REMOVE;
     }
 

@@ -2,6 +2,7 @@
 
 #include "mixer/basetrackplayer.h"
 #include "moc_qmlwaveformoverview.cpp"
+#include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace {
 constexpr double kDesiredChannelHeight = 255;
@@ -262,33 +263,31 @@ void QmlWaveformOverview::drawFiltered(QPainter* pPainter,
         ConstWaveformPointer pWaveform,
         int completion) const {
     const double offsetX = completion / 2.0;
+    const auto drawChannel = [&](int dataIndex, float direction) {
+        waveform::WaveformRgbColumn column;
+        column.lowAmplitude = pWaveform->getLow(dataIndex);
+        column.midAmplitude = pWaveform->getMid(dataIndex);
+        column.highAmplitude = pWaveform->getHigh(dataIndex);
+        column.unionAmplitude = pWaveform->getAll(dataIndex);
+        const auto layers =
+                waveform::buildRekordboxOverviewWaveformLayers(column);
+        float innerAmplitude = 0.0f;
+        for (const waveform::WaveformRgbLayer& layer : layers) {
+            const waveform::WaveformRgbColor color =
+                    waveform::rekordboxWaveformLayerColor(layer.bands);
+            pPainter->setPen(QColor(color.red, color.green, color.blue));
+            const float outerAmplitude = innerAmplitude + layer.amplitude;
+            pPainter->drawLine(QPointF(offsetX, direction * innerAmplitude),
+                    QPointF(offsetX, direction * outerAmplitude));
+            innerAmplitude = outerAmplitude;
+        }
+    };
 
     if (channels.testFlag(ChannelFlag::LeftChannel)) {
-        const uint8_t leftHigh = pWaveform->getHigh(completion);
-        pPainter->setPen(m_colorHigh);
-        pPainter->drawLine(QPointF(offsetX, 2 * -leftHigh), QPointF(offsetX, 0.0));
-
-        const uint8_t leftMid = pWaveform->getMid(completion);
-        pPainter->setPen(m_colorMid);
-        pPainter->drawLine(QPointF(offsetX, 1.5 * -leftMid), QPointF(offsetX, 0.0));
-
-        const uint8_t leftLow = pWaveform->getLow(completion);
-        pPainter->setPen(m_colorLow);
-        pPainter->drawLine(QPointF(offsetX, -leftLow), QPointF(offsetX, 0.0));
+        drawChannel(completion, -1.0f);
     }
-
     if (channels.testFlag(ChannelFlag::RightChannel)) {
-        const uint8_t rightHigh = pWaveform->getHigh(completion + 1);
-        pPainter->setPen(m_colorHigh);
-        pPainter->drawLine(QPointF(offsetX, 0), QPointF(offsetX, 2 * rightHigh));
-
-        const uint8_t rightMid = pWaveform->getMid(completion + 1) * 2;
-        pPainter->setPen(m_colorMid);
-        pPainter->drawLine(QPointF(offsetX, 0), QPointF(offsetX, 1.5 * rightMid));
-
-        const uint8_t rightLow = pWaveform->getLow(completion + 1);
-        pPainter->setPen(m_colorLow);
-        pPainter->drawLine(QPointF(offsetX, 0), QPointF(offsetX, rightLow));
+        drawChannel(completion + 1, 1.0f);
     }
 }
 

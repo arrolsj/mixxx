@@ -1,7 +1,7 @@
 #include "analyzer/analyzerwaveform.h"
 
 #include "analyzer/analyzertrack.h"
-#include "engine/filters/enginefilterbessel4.h"
+#include "engine/filters/enginefilterbiquad1.h"
 #include "track/track.h"
 #include "util/logger.h"
 #include "waveform/waveformfactory.h"
@@ -10,9 +10,14 @@ namespace {
 
 mixxx::Logger kLogger("AnalyzerWaveform");
 
-constexpr double kLowMidFreqHz = 600.0;
-
-constexpr double kMidHighFreqHz = 4000.0;
+// Rekordbox three-band waveform analysis uses second-order Butterworth filters
+// with Q = 1 / sqrt(2) and these band edges.
+constexpr double kButterworthQ = 0.7071067811865475244;
+constexpr double kLowPassHz = 300.0;
+constexpr double kMidHighPassHz = 250.0;
+constexpr double kMidLowPassHz = 1200.0;
+constexpr double kHighHighPassHz = 3000.0;
+constexpr double kHighLowPassHz = 9000.0;
 
 } // namespace
 
@@ -25,9 +30,10 @@ AnalyzerWaveform::AnalyzerWaveform(
           m_stride(0, 0),
           m_currentStride(0),
           m_currentSummaryStride(0) {
-    m_filter[0] = nullptr;
-    m_filter[1] = nullptr;
-    m_filter[2] = nullptr;
+    for (int i = 0; i < FilterCount; ++i) {
+        m_filter[i] = nullptr;
+        m_bandLimitFilter[i] = nullptr;
+    }
     m_analysisDao.initialize(dbConnection);
 }
 
@@ -150,15 +156,23 @@ bool AnalyzerWaveform::shouldAnalyze(TrackPointer tio) const {
 }
 
 void AnalyzerWaveform::createFilters(mixxx::audio::SampleRate sampleRate) {
-    // m_filter[Low] = new EngineFilterButterworth8Low(sampleRate, kLowMidFreqHz);
-    // m_filter[Mid] = new EngineFilterButterworth8Band(sampleRate, kLowMidFreqHz, kMidHighFreqHz);
-    // m_filter[High] = new EngineFilterButterworth8High(sampleRate, kMidHighFreqHz);
-    m_filter[Low] = new EngineFilterBessel4Low(sampleRate, kLowMidFreqHz);
-    m_filter[Mid] = new EngineFilterBessel4Band(sampleRate, kLowMidFreqHz, kMidHighFreqHz);
-    m_filter[High] = new EngineFilterBessel4High(sampleRate, kMidHighFreqHz);
+    m_filter[Low] = new EngineFilterBiquad1Low(
+            sampleRate, kLowPassHz, kButterworthQ, false);
+    m_filter[Mid] = new EngineFilterBiquad1High(
+            sampleRate, kMidHighPassHz, kButterworthQ, false);
+    m_bandLimitFilter[Mid] = new EngineFilterBiquad1Low(
+            sampleRate, kMidLowPassHz, kButterworthQ, false);
+    m_filter[High] = new EngineFilterBiquad1High(
+            sampleRate, kHighHighPassHz, kButterworthQ, false);
+    m_bandLimitFilter[High] = new EngineFilterBiquad1Low(
+            sampleRate, kHighLowPassHz, kButterworthQ, false);
+
     // settle filters for silence in preroll to avoids ramping (Issue #7776)
     for (int i = 0; i < FilterCount; ++i) {
         m_filter[i]->assumeSettled();
+        if (m_bandLimitFilter[i]) {
+            m_bandLimitFilter[i]->assumeSettled();
+        }
     }
 }
 
@@ -167,6 +181,10 @@ void AnalyzerWaveform::destroyFilters() {
         if (m_filter[i]) {
             delete m_filter[i];
             m_filter[i] = nullptr;
+        }
+        if (m_bandLimitFilter[i]) {
+            delete m_bandLimitFilter[i];
+            m_bandLimitFilter[i] = nullptr;
         }
     }
 }
@@ -184,11 +202,17 @@ bool AnalyzerWaveform::processSamples(const CSAMPLE* buffer, SINT count) {
         m_buffers[Low].resize(count);
         m_buffers[Mid].resize(count);
         m_buffers[High].resize(count);
+        m_filterStageBuffers[Mid].resize(count);
+        m_filterStageBuffers[High].resize(count);
     }
 
     m_filter[Low]->process(buffer, &m_buffers[Low][0], count);
-    m_filter[Mid]->process(buffer, &m_buffers[Mid][0], count);
-    m_filter[High]->process(buffer, &m_buffers[High][0], count);
+    m_filter[Mid]->process(buffer, &m_filterStageBuffers[Mid][0], count);
+    m_bandLimitFilter[Mid]->process(
+            &m_filterStageBuffers[Mid][0], &m_buffers[Mid][0], count);
+    m_filter[High]->process(buffer, &m_filterStageBuffers[High][0], count);
+    m_bandLimitFilter[High]->process(
+            &m_filterStageBuffers[High][0], &m_buffers[High][0], count);
 
     m_waveform->setSaveState(Waveform::SaveState::NotSaved);
     m_waveformSummary->setSaveState(Waveform::SaveState::NotSaved);

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <QDir>
 #include <QtDebug>
 #include <vector>
@@ -9,6 +11,7 @@
 #include "library/dao/analysisdao.h"
 #include "test/mixxxtest.h"
 #include "track/track.h"
+#include "waveform/waveformfactory.h"
 
 namespace {
 
@@ -17,7 +20,16 @@ constexpr std::size_t kCanarySize = 1024 * 4;
 constexpr float kMagicFloat = 1234.567890f;
 constexpr float kCanaryFloat = 0.0f;
 constexpr int kChannelCount = 2;
+constexpr int kSampleRate = 44100;
+constexpr int kToneFrameCount = kSampleRate;
+constexpr float kToneAmplitude = 0.5f;
 const QString kReferenceBuffersPath = QStringLiteral("reference_buffers/");
+
+struct BandPeaks {
+    int low;
+    int mid;
+    int high;
+};
 
 class AnalyzerWaveformTest : public MixxxTest {
   protected:
@@ -90,6 +102,42 @@ class AnalyzerWaveformTest : public MixxxTest {
         f.close();
     }
 
+    BandPeaks analyzeTone(double frequencyHz) {
+        TrackPointer pTrack = Track::newTemporary();
+        pTrack->setAudioProperties(
+                mixxx::audio::ChannelCount(kChannelCount),
+                mixxx::audio::SampleRate(kSampleRate),
+                mixxx::audio::Bitrate(),
+                mixxx::Duration::fromMillis(1000));
+
+        AnalyzerWaveform analyzer(config(), QSqlDatabase());
+        EXPECT_TRUE(analyzer.initialize(
+                AnalyzerTrack(pTrack), pTrack->getSampleRate(), kToneFrameCount));
+
+        std::vector<CSAMPLE> samples(kToneFrameCount * kChannelCount);
+        const double radiansPerFrame = 2.0 * M_PI * frequencyHz / kSampleRate;
+        for (int frame = 0; frame < kToneFrameCount; ++frame) {
+            const auto sample = static_cast<CSAMPLE>(
+                    kToneAmplitude * std::sin(radiansPerFrame * frame));
+            samples[frame * kChannelCount] = sample;
+            samples[frame * kChannelCount + 1] = sample;
+        }
+        EXPECT_TRUE(analyzer.processSamples(samples.data(), samples.size()));
+
+        ConstWaveformPointer pWaveform = pTrack->getWaveform();
+        EXPECT_NE(pWaveform, nullptr);
+        BandPeaks peaks{0, 0, 0};
+        if (pWaveform) {
+            for (int i = 0; i < pWaveform->getCompletion(); ++i) {
+                peaks.low = std::max(peaks.low, static_cast<int>(pWaveform->getLow(i)));
+                peaks.mid = std::max(peaks.mid, static_cast<int>(pWaveform->getMid(i)));
+                peaks.high = std::max(peaks.high, static_cast<int>(pWaveform->getHigh(i)));
+            }
+        }
+        analyzer.cleanup();
+        return peaks;
+    }
+
     void TearDown() override {
     }
 
@@ -150,6 +198,40 @@ TEST_F(AnalyzerWaveformTest, canary) {
     EXPECT_EQ(pWaveformSummary->getDataSize(), 3842);
     EXPECT_EQ(pWaveformSummary->getCompletion(), 3842);
     EXPECT_DOUBLE_EQ(pWaveformSummary->getAudioVisualRatio(), 1.0);
+}
+
+TEST_F(AnalyzerWaveformTest, usesRekordboxThreeBandFrequencySplit) {
+    const BandPeaks bass = analyzeTone(100.0);
+    EXPECT_GT(bass.low, bass.mid * 3);
+    EXPECT_GT(bass.low, bass.high * 10);
+
+    const BandPeaks midrange = analyzeTone(600.0);
+    EXPECT_GT(midrange.mid, midrange.low * 2);
+    EXPECT_GT(midrange.mid, midrange.high * 10);
+
+    const BandPeaks treble = analyzeTone(5000.0);
+    EXPECT_GT(treble.high, treble.low * 10);
+    EXPECT_GT(treble.high, treble.mid * 5);
+
+    const BandPeaks aboveHighBand = analyzeTone(12000.0);
+    EXPECT_LT(aboveHighBand.high, treble.high * 3 / 4);
+}
+
+TEST_F(AnalyzerWaveformTest, storesLinearBandAmplitudes) {
+    EXPECT_FLOAT_EQ(scaleSignal(0.25f, Low), 0.25f);
+    EXPECT_FLOAT_EQ(scaleSignal(0.25f, Mid), 0.25f);
+    EXPECT_FLOAT_EQ(scaleSignal(0.25f, High), 0.25f);
+}
+
+TEST_F(AnalyzerWaveformTest, invalidatesPreRekordboxWaveformCache) {
+    EXPECT_EQ(WaveformFactory::waveformVersionToVersionClass(WAVEFORM_5_VERSION),
+            WaveformFactory::VC_REMOVE);
+    EXPECT_EQ(WaveformFactory::waveformSummaryVersionToVersionClass(
+                      WAVEFORMSUMMARY_5_VERSION),
+            WaveformFactory::VC_REMOVE);
+    EXPECT_EQ(WaveformFactory::waveformVersionToVersionClass(
+                      WaveformFactory::currentWaveformVersion()),
+            WaveformFactory::VC_USE);
 }
 
 } // namespace

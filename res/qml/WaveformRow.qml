@@ -21,6 +21,7 @@ Item {
     property color mainCueColor: "#F8A030"
     property real waveformZoom: zoomControl.value
     property bool beatGridDownbeatsOnly: false
+    property string waveformMode: "RGB"
 
     Item {
         id: waveformContainer
@@ -131,6 +132,9 @@ Item {
             highColor: "#0000FF"
             midColor: "#00FF00"
             lowColor: "#FF0000"
+            renderer: root.waveformMode === "3-BAND"
+                    ? Mixxx.ViewportWaveform.Renderer.ThreeBand
+                    : Mixxx.ViewportWaveform.Renderer.RGB
             beatGridVisible: true
             beatGridDownbeatsOnly: root.beatGridDownbeatsOnly
             beatColor: Theme.waveformBeatColor

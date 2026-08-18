@@ -41,14 +41,6 @@ void addRectangle(QSGGeometry::ColoredPoint2D* pVertices,
     pVertices[(*pVertexIndex)++].set(right, bottom, red, green, blue, alpha);
 }
 
-mixxx::waveform::WaveformRgbColorF toColorF(const QColor& color) {
-    return {
-            color.redF(),
-            color.greenF(),
-            color.blueF(),
-    };
-}
-
 struct PremultipliedColor {
     uchar red;
     uchar green;
@@ -64,6 +56,14 @@ PremultipliedColor toPremultipliedColor(const QColor& color, double opacity) {
             static_cast<uchar>(color.green() * alpha / 255),
             static_cast<uchar>(color.blue() * alpha / 255),
             static_cast<uchar>(alpha),
+    };
+}
+
+mixxx::waveform::WaveformRgbColorF toColorF(const QColor& color) {
+    return {
+            color.redF(),
+            color.greenF(),
+            color.blueF(),
     };
 }
 
@@ -240,6 +240,19 @@ void QmlViewportWaveform::setBeatGridVisible(bool visible) {
     }
     m_beatGridVisible = visible;
     emit beatGridVisibleChanged();
+    update();
+}
+
+QmlViewportWaveform::Renderer QmlViewportWaveform::renderer() const {
+    return m_renderer;
+}
+
+void QmlViewportWaveform::setRenderer(Renderer renderer) {
+    if (m_renderer == renderer) {
+        return;
+    }
+    m_renderer = renderer;
+    emit rendererChanged();
     update();
 }
 
@@ -447,9 +460,7 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                     dataSize,
                     completion,
                     viewport,
-                    toColorF(m_lowColor),
-                    toColorF(m_midColor),
-                    toColorF(m_highColor));
+                    m_renderer == Renderer::ThreeBand);
 
     if (columns.empty()) {
         delete pOldNode;
@@ -485,9 +496,11 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
 
     QSGGeometry* pGeometry = pNode->geometry();
     constexpr int kVerticesPerRectangle = 6;
+    const int rectanglesPerColumn =
+            m_renderer == Renderer::ThreeBand ? 4 : 1;
     const int vertexCount = kVerticesPerRectangle *
             (static_cast<int>(beatGridRectangleCount) +
-                    static_cast<int>(columns.size()) + 1);
+                    static_cast<int>(columns.size()) * rectanglesPerColumn + 1);
     if (pGeometry->vertexCount() != vertexCount) {
         pGeometry->allocate(vertexCount);
     }
@@ -536,9 +549,17 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
             static_cast<uchar>(m_axesColor.blue()),
             static_cast<uchar>(m_axesColor.alpha()));
 
-    const float amplitudeToHeight = halfHeight / 255.0f * 0.6f;
+    const float amplitudeHeightScale =
+            m_renderer == Renderer::ThreeBand ? 0.8f : 0.6f;
+    const float amplitudeToHeight =
+            halfHeight / 255.0f * amplitudeHeightScale;
     const float halfPhysicalPixel =
             static_cast<float>(0.5 / m_devicePixelRatio);
+    const float outlineHeight =
+            static_cast<float>(1.0 / m_devicePixelRatio);
+    const waveform::WaveformRgbColorF lowColor = toColorF(m_lowColor);
+    const waveform::WaveformRgbColorF midColor = toColorF(m_midColor);
+    const waveform::WaveformRgbColorF highColor = toColorF(m_highColor);
     for (int columnIndex = 0;
             columnIndex < static_cast<int>(columns.size());
             ++columnIndex) {
@@ -546,16 +567,58 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                 columns[static_cast<std::size_t>(columnIndex)];
         const float centerX =
                 static_cast<float>(columnIndex / m_devicePixelRatio);
+        if (m_renderer == Renderer::RGB) {
+            const waveform::WaveformRgbColorF color =
+                    waveform::mixWaveformRgbColor(column,
+                            lowColor,
+                            midColor,
+                            highColor);
+            addRectangle(pVertices,
+                    &vertexIndex,
+                    centerX - halfPhysicalPixel,
+                    halfHeight - amplitudeToHeight * column.leftAmplitude,
+                    centerX + halfPhysicalPixel,
+                    halfHeight + amplitudeToHeight * column.rightAmplitude,
+                    colorByte(color.red),
+                    colorByte(color.green),
+                    colorByte(color.blue),
+                    255);
+            continue;
+        }
+
+        const auto layers = waveform::buildRekordboxWaveformLayers(column);
+        // Rekordbox outlines only the union of the three displayed bands.
+        // Using Mixxx's unfiltered `all` peak here creates a tall, comb-like
+        // black halo that does not belong to the 3-band image.
+        const float unionAmplitude = layers.front().amplitude;
+        const float unionHeight = unionAmplitude > 0.0f
+                ? amplitudeToHeight * unionAmplitude + outlineHeight
+                : 0.0f;
         addRectangle(pVertices,
                 &vertexIndex,
                 centerX - halfPhysicalPixel,
-                halfHeight - amplitudeToHeight * column.leftAmplitude,
+                halfHeight - unionHeight,
                 centerX + halfPhysicalPixel,
-                halfHeight + amplitudeToHeight * column.rightAmplitude,
-                colorByte(column.red),
-                colorByte(column.green),
-                colorByte(column.blue),
+                halfHeight + unionHeight,
+                0,
+                0,
+                0,
                 255);
+        for (const waveform::WaveformRgbLayer& layer : layers) {
+            const waveform::WaveformRgbColor color =
+                    waveform::rekordboxWaveformLayerColor(layer.bands);
+            const float layerHeight = amplitudeToHeight * layer.amplitude;
+            addRectangle(pVertices,
+                    &vertexIndex,
+                    centerX - halfPhysicalPixel,
+                    halfHeight - layerHeight,
+                    centerX + halfPhysicalPixel,
+                    halfHeight + layerHeight,
+                    color.red,
+                    color.green,
+                    color.blue,
+                    255);
+        }
     }
 
     pGeometry->markVertexDataDirty();

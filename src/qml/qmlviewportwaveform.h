@@ -28,6 +28,7 @@ class QmlViewportWaveform : public QQuickItem {
     Q_PROPERTY(QColor highColor READ highColor WRITE setHighColor NOTIFY highColorChanged)
     Q_PROPERTY(QColor midColor READ midColor WRITE setMidColor NOTIFY midColorChanged)
     Q_PROPERTY(QColor lowColor READ lowColor WRITE setLowColor NOTIFY lowColorChanged)
+    Q_PROPERTY(Renderer renderer READ renderer WRITE setRenderer NOTIFY rendererChanged)
     Q_PROPERTY(bool beatGridVisible READ beatGridVisible WRITE setBeatGridVisible
                     NOTIFY beatGridVisibleChanged)
     Q_PROPERTY(bool beatGridDownbeatsOnly READ beatGridDownbeatsOnly
@@ -40,6 +41,12 @@ class QmlViewportWaveform : public QQuickItem {
     QML_NAMED_ELEMENT(ViewportWaveform)
 
   public:
+    enum class Renderer {
+        RGB = 1,
+        ThreeBand = 2,
+    };
+    Q_ENUM(Renderer)
+
     explicit QmlViewportWaveform(QQuickItem* parent = nullptr);
     ~QmlViewportWaveform() override = default;
 
@@ -63,6 +70,8 @@ class QmlViewportWaveform : public QQuickItem {
     void setMidColor(const QColor& color);
     QColor lowColor() const;
     void setLowColor(const QColor& color);
+    Renderer renderer() const;
+    void setRenderer(Renderer renderer);
     bool beatGridVisible() const;
     void setBeatGridVisible(bool visible);
     bool beatGridDownbeatsOnly() const;
@@ -85,6 +94,7 @@ class QmlViewportWaveform : public QQuickItem {
     void highColorChanged();
     void midColorChanged();
     void lowColorChanged();
+    void rendererChanged();
     void beatGridVisibleChanged();
     void beatGridDownbeatsOnlyChanged();
     void beatColorChanged();
@@ -126,6 +136,7 @@ class QmlViewportWaveform : public QQuickItem {
     QColor m_highColor{Qt::blue};
     QColor m_midColor{Qt::green};
     QColor m_lowColor{Qt::red};
+    Renderer m_renderer{Renderer::RGB};
     bool m_beatGridVisible{false};
     bool m_beatGridDownbeatsOnly{false};
     QColor m_beatColor{Qt::white};

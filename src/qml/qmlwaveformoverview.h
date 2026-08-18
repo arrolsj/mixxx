@@ -36,7 +36,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
 
     enum class Renderer {
         RGB = 1,
-        Filtered = 2,
+        ThreeBand = 2,
+        Filtered = ThreeBand,
     };
     Q_ENUM(Renderer)
 
