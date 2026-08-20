@@ -3,6 +3,7 @@
 #include <QQmlEngineExtensionPlugin>
 
 #include "control/controlsortfiltermodel.h"
+#include "control/controlobject.h"
 #include "controllers/controllermanager.h"
 #include "moc_qmlapplication.cpp"
 #include "qml/asyncimageprovider.h"
@@ -26,6 +27,7 @@ Q_IMPORT_QML_PLUGIN(Mixxx_ControlsPlugin)
 
 namespace {
 const QString kMainQmlFileName = QStringLiteral("qml/main.qml");
+const QString kLastCueGeneralGroup = QStringLiteral("[LastCueGeneral]");
 
 // Converts a (capturing) lambda into a function pointer that can be passed to
 // qmlRegisterSingletonType.
@@ -49,6 +51,14 @@ QmlApplication::QmlApplication(
           m_mainFilePath(mainFilePath.isEmpty()
                           ? pCoreServices->getSettings()->getResourcePath() + kMainQmlFileName
                           : mainFilePath),
+          m_pPerformancePadModeDeck1Control(std::make_unique<ControlObject>(
+                  ConfigKey(kLastCueGeneralGroup, QStringLiteral("pad_mode_deck1")))),
+          m_pPerformancePadModeDeck2Control(std::make_unique<ControlObject>(
+                  ConfigKey(kLastCueGeneralGroup, QStringLiteral("pad_mode_deck2")))),
+          m_pPerformancePadParameterDeck1Control(std::make_unique<ControlObject>(
+                  ConfigKey(kLastCueGeneralGroup, QStringLiteral("pad_parameter_deck1")))),
+          m_pPerformancePadParameterDeck2Control(std::make_unique<ControlObject>(
+                  ConfigKey(kLastCueGeneralGroup, QStringLiteral("pad_parameter_deck2")))),
           m_pAppEngine(nullptr),
           m_autoReload() {
     Q_UNUSED(app);

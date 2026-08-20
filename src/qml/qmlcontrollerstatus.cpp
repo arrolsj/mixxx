@@ -104,6 +104,28 @@ QHash<int, QByteArray> QmlControllerStatus::roleNames() const {
     return kRoleNames;
 }
 
+QStringList QmlControllerStatus::detectedControllerNames() const {
+    return controllerNames(false);
+}
+
+QStringList QmlControllerStatus::openControllerNames() const {
+    return controllerNames(true);
+}
+
+QStringList QmlControllerStatus::controllerNames(bool openOnly) const {
+    QStringList names;
+    for (const auto& pController : m_controllers) {
+        if (!pController || (openOnly && !isControllerOpen(pController))) {
+            continue;
+        }
+        const QString name = pController->getName().trimmed();
+        if (!name.isEmpty() && !names.contains(name)) {
+            names.append(name);
+        }
+    }
+    return names;
+}
+
 void QmlControllerStatus::rebuildDevices() {
     replaceDevices(m_pManager->getControllers());
 }
@@ -127,6 +149,7 @@ void QmlControllerStatus::replaceDevices(
     }
     endResetModel();
     emit devicesChanged();
+    emit controllerNamesChanged();
     updateHasOpenController();
 }
 
@@ -141,6 +164,7 @@ void QmlControllerStatus::handleOpenChanged() {
             break;
         }
     }
+    emit controllerNamesChanged();
     updateHasOpenController();
 }
 
@@ -195,6 +219,7 @@ void QmlControllerStatus::setDeviceForcedDisconnected(
             emit dataChanged(index(row, 0), index(row, 0), {OpenRole});
         }
     }
+    emit controllerNamesChanged();
     updateHasOpenController();
 }
 

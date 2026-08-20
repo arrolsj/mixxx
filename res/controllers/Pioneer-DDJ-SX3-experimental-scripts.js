@@ -144,6 +144,33 @@ PioneerDDJSX.activePadMode = [
 ];
 PioneerDDJSX.samplerVelocityMode = [false, false, false, false];
 
+PioneerDDJSX.publishPadMode = function(group) {
+    var deck = PioneerDDJSX.channelGroups[group],
+        parameter = 0;
+
+    // LastCUE Box currently renders only the two global product decks.
+    if (deck !== 0 && deck !== 1) {
+        return;
+    }
+    if (PioneerDDJSX.activePadMode[deck] === PioneerDDJSX.padModes.loopRoll) {
+        parameter = PioneerDDJSX.selectedLoopRollParam[deck];
+    } else if (PioneerDDJSX.activePadMode[deck] === PioneerDDJSX.padModes.beatloop) {
+        parameter = PioneerDDJSX.selectedLoopParam[deck];
+    } else if (PioneerDDJSX.activePadMode[deck] === PioneerDDJSX.padModes.sampler) {
+        parameter = PioneerDDJSX.selectedSamplerBank;
+    } else if (PioneerDDJSX.activePadMode[deck] === PioneerDDJSX.padModes.slicer) {
+        parameter = PioneerDDJSX.selectedSlicerQuantizeParam[deck];
+    }
+    engine.setValue("[LastCueGeneral]", "pad_mode_deck" + (deck + 1),
+        PioneerDDJSX.activePadMode[deck]);
+    engine.setValue("[LastCueGeneral]", "pad_parameter_deck" + (deck + 1), parameter);
+};
+
+PioneerDDJSX.publishVisiblePadModes = function() {
+    PioneerDDJSX.publishPadMode("[Channel1]");
+    PioneerDDJSX.publishPadMode("[Channel2]");
+};
+
 // FX storage:
 PioneerDDJSX.fxKnobMSBValue = [0, 0];
 PioneerDDJSX.shiftFxKnobMSBValue = [0, 0];
@@ -1033,6 +1060,7 @@ PioneerDDJSX.toggleHotCueMode = function(channel, control, value, status, group)
         PioneerDDJSX.activePadMode[deck] = PioneerDDJSX.padModes.hotCue;
         PioneerDDJSX.activeSlicerMode[deck] = PioneerDDJSX.slicerModes.contSlice;
         PioneerDDJSX.nonPadLedControl(group, PioneerDDJSX.nonPadLeds.hotCueMode, value);
+        PioneerDDJSX.publishPadMode(group);
     }
 };
 
@@ -1043,6 +1071,7 @@ PioneerDDJSX.toggleBeatloopRollMode = function(channel, control, value, status, 
         PioneerDDJSX.activePadMode[deck] = PioneerDDJSX.padModes.loopRoll;
         PioneerDDJSX.activeSlicerMode[deck] = PioneerDDJSX.slicerModes.contSlice;
         PioneerDDJSX.nonPadLedControl(group, PioneerDDJSX.nonPadLeds.rollMode, value);
+        PioneerDDJSX.publishPadMode(group);
     }
 };
 
@@ -1060,6 +1089,7 @@ PioneerDDJSX.toggleSlicerMode = function(channel, control, value, status, group)
         }
         PioneerDDJSX.activePadMode[deck] = PioneerDDJSX.padModes.slicer;
         PioneerDDJSX.nonPadLedControl(group, PioneerDDJSX.nonPadLeds.slicerMode, value);
+        PioneerDDJSX.publishPadMode(group);
     }
 };
 
@@ -1070,6 +1100,7 @@ PioneerDDJSX.toggleSamplerMode = function(channel, control, value, status, group
         PioneerDDJSX.activePadMode[deck] = PioneerDDJSX.padModes.sampler;
         PioneerDDJSX.activeSlicerMode[deck] = PioneerDDJSX.slicerModes.contSlice;
         PioneerDDJSX.nonPadLedControl(group, PioneerDDJSX.nonPadLeds.samplerMode, value);
+        PioneerDDJSX.publishPadMode(group);
     }
 };
 
@@ -1096,6 +1127,7 @@ PioneerDDJSX.toggleBeatloopMode = function(channel, control, value, status, grou
         PioneerDDJSX.activePadMode[deck] = PioneerDDJSX.padModes.beatloop;
         PioneerDDJSX.activeSlicerMode[deck] = PioneerDDJSX.slicerModes.contSlice;
         PioneerDDJSX.nonPadLedControl(group, PioneerDDJSX.nonPadLeds.shiftRollMode, value);
+        PioneerDDJSX.publishPadMode(group);
     }
 };
 
@@ -1380,6 +1412,8 @@ PioneerDDJSX.changeParameters = function(group, ctrl, value) {
         PioneerDDJSX.selectedSlicerQuantizeParam[deck],
         PioneerDDJSX.selectedSlicerDomainParam[deck]
     );
+    // Sampler bank selection is shared, so refresh both visible product decks.
+    PioneerDDJSX.publishVisiblePadModes();
 };
 
 PioneerDDJSX.parameterLeft = function(channel, control, value, status, group) {

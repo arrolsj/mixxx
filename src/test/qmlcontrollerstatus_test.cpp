@@ -115,6 +115,10 @@ TEST_F(QmlControllerStatusTest, RebuildsDeviceRowsAndAggregateOpenState) {
     ASSERT_EQ(status.rowCount(), 2);
     EXPECT_EQ(status.deviceCount(), 2);
     EXPECT_TRUE(status.hasOpenController());
+    EXPECT_EQ(status.detectedControllerNames(),
+            QStringList({QStringLiteral("SX3"), QStringLiteral("Loopback")}));
+    EXPECT_EQ(status.openControllerNames(),
+            QStringList({QStringLiteral("SX3")}));
     EXPECT_EQ(devicesChangedCount, 1);
     EXPECT_EQ(openStateChangedCount, 1);
 
@@ -149,6 +153,9 @@ TEST_F(QmlControllerStatusTest, RebuildsDeviceRowsAndAggregateOpenState) {
     ASSERT_EQ(status.rowCount(), 1);
     EXPECT_EQ(status.deviceCount(), 1);
     EXPECT_FALSE(status.hasOpenController());
+    EXPECT_EQ(status.detectedControllerNames(),
+            QStringList({QStringLiteral("Loopback")}));
+    EXPECT_TRUE(status.openControllerNames().isEmpty());
     EXPECT_EQ(devicesChangedCount, 2);
     EXPECT_EQ(openStateChangedCount, 2);
     EXPECT_QSTRING_EQ(QStringLiteral("Loopback"),
@@ -233,6 +240,9 @@ TEST_F(QmlControllerStatusTest,
     const QString deviceName = QStringLiteral("PIONEER_DJ_DDJ-SX3");
 
     ASSERT_TRUE(status.hasOpenController());
+    EXPECT_EQ(status.openControllerNames(),
+            QStringList({QStringLiteral("PIONEER DJ DDJ-SX3"),
+                    QStringLiteral("Loopback")}));
     ASSERT_TRUE(QMetaObject::invokeMethod(&status,
             "handleDeviceDisconnected",
             Qt::DirectConnection,
@@ -243,6 +253,8 @@ TEST_F(QmlControllerStatusTest,
     EXPECT_TRUE(status.hasOpenController());
     EXPECT_TRUE(input.isOpen());
     EXPECT_TRUE(output.isOpen());
+    EXPECT_EQ(status.openControllerNames(),
+            QStringList({QStringLiteral("Loopback")}));
 
     // Enumeration must not temporarily clear the logical disconnect state
     // while stale native controller objects still report themselves open.
@@ -262,6 +274,8 @@ TEST_F(QmlControllerStatusTest,
     EXPECT_TRUE(isOpen(1));
     EXPECT_FALSE(isOpen(2));
     EXPECT_TRUE(status.hasOpenController());
+    EXPECT_EQ(status.openControllerNames(),
+            QStringList({QStringLiteral("PIONEER DJ DDJ-SX3")}));
 }
 
 } // namespace

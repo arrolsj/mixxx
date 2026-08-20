@@ -6,6 +6,8 @@
 #include "coreservices.h"
 #include "qmlautoreload.h"
 
+class ControlObject;
+
 namespace mixxx {
 namespace qml {
 
@@ -25,6 +27,11 @@ class QmlApplication : public QObject {
     std::shared_ptr<CoreServices> m_pCoreServices;
 
     QString m_mainFilePath;
+
+    std::unique_ptr<ControlObject> m_pPerformancePadModeDeck1Control;
+    std::unique_ptr<ControlObject> m_pPerformancePadModeDeck2Control;
+    std::unique_ptr<ControlObject> m_pPerformancePadParameterDeck1Control;
+    std::unique_ptr<ControlObject> m_pPerformancePadParameterDeck2Control;
 
     std::unique_ptr<QQmlApplicationEngine> m_pAppEngine;
     QmlAutoReload m_autoReload;

@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QQmlEngine>
 #include <QSet>
+#include <QStringList>
 
 #include "controllers/controller.h"
 
@@ -18,6 +19,8 @@ class QmlControllerStatus : public QAbstractListModel {
     Q_PROPERTY(mixxx::qml::QmlControllerStatus* devices READ devices CONSTANT)
     Q_PROPERTY(bool hasOpenController READ hasOpenController NOTIFY hasOpenControllerChanged)
     Q_PROPERTY(int deviceCount READ deviceCount NOTIFY devicesChanged)
+    Q_PROPERTY(QStringList detectedControllerNames READ detectedControllerNames NOTIFY controllerNamesChanged)
+    Q_PROPERTY(QStringList openControllerNames READ openControllerNames NOTIFY controllerNamesChanged)
     QML_NAMED_ELEMENT(ControllerStatus)
     QML_SINGLETON
 
@@ -51,10 +54,13 @@ class QmlControllerStatus : public QAbstractListModel {
     int deviceCount() const {
         return static_cast<int>(m_controllers.size());
     }
+    QStringList detectedControllerNames() const;
+    QStringList openControllerNames() const;
 
   signals:
     void hasOpenControllerChanged();
     void devicesChanged();
+    void controllerNamesChanged();
 
   protected:
     // Allows the device-list behavior to be exercised without constructing a
@@ -72,6 +78,7 @@ class QmlControllerStatus : public QAbstractListModel {
 
   private:
     bool isControllerOpen(const Controller* pController) const;
+    QStringList controllerNames(bool openOnly) const;
     void setDeviceForcedDisconnected(
             const QString& deviceName, bool forcedDisconnected);
     void updateHasOpenController();
