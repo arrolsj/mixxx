@@ -118,6 +118,30 @@ TEST_F(ControllerScriptEngineLegacyTest,
     EXPECT_DOUBLE_EQ(1.0, playControl->get());
 }
 
+TEST_F(ControllerScriptEngineLegacyTest,
+        PioneerDdjSx3PlayButtonClearsLatchedScratchBeforePlaying) {
+    auto playControl =
+            std::make_unique<ControlObject>(ConfigKey("[Channel1]", "play"));
+    auto scratchControl = std::make_unique<ControlObject>(
+            ConfigKey("[Channel1]", "scratch2_enable"));
+
+    QFileInfo commonScript(config()->getResourcePath() +
+            QStringLiteral("/controllers/common-controller-scripts.js"));
+    ASSERT_TRUE(evaluateScriptFile(commonScript));
+    QFileInfo sx3Script(config()->getResourcePath() +
+            QStringLiteral("/controllers/Pioneer-DDJ-SX3-experimental-scripts.js"));
+    ASSERT_TRUE(evaluateScriptFile(sx3Script));
+    ASSERT_TRUE(evaluateAndAssert(
+            "PioneerDDJSX.channelGroups = {'[Channel1]': 0};"));
+
+    playControl->set(0.0);
+    scratchControl->set(1.0);
+    ASSERT_TRUE(evaluateAndAssert(
+            "PioneerDDJSX.playButton(0, 0, 127, 0x90, '[Channel1]');"));
+    EXPECT_DOUBLE_EQ(0.0, scratchControl->get());
+    EXPECT_DOUBLE_EQ(1.0, playControl->get());
+}
+
 TEST_F(ControllerScriptEngineLegacyTest, setValue) {
     auto co = std::make_unique<ControlObject>(ConfigKey("[Test]", "co"));
     EXPECT_TRUE(evaluateAndAssert("engine.setValue('[Test]', 'co', 1.0);"));

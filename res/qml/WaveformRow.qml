@@ -1,6 +1,6 @@
 import "." as Skin
 import Mixxx 1.0 as Mixxx
-import QtQuick 2.14
+import QtQuick 6.4
 import QtQuick.Shapes 1.12
 import QtQuick.Window 2.14
 import "Theme"
@@ -101,13 +101,22 @@ Item {
         // calculation used by the stable QWidget waveform; no QML-side velocity
         // estimation or correction is applied.
         property real displayedPlayPosition: playPositionControl.value
+        property int displayFrameIntervalMicros: 16667
 
-        Timer {
-            interval: 8
-            repeat: true
+        // Follow the actual Qt Quick render cadence. A fixed millisecond timer
+        // aliases against high-refresh displays (for example 8 ms on 164 Hz)
+        // and leaves otherwise valid display frames with a stationary waveform.
+        FrameAnimation {
             running: root.deckPlayer.isLoaded
             onTriggered: {
-                const visualPosition = root.deckPlayer.getVisualPlayPosition(interval * 1000);
+                const measuredFrameTime = smoothFrameTime > 0
+                        ? smoothFrameTime : frameTime;
+                if (measuredFrameTime > 0 && measuredFrameTime < 0.1) {
+                    waveformContainer.displayFrameIntervalMicros = Math.max(1,
+                            Math.round(measuredFrameTime * 1000000));
+                }
+                const visualPosition = root.deckPlayer.getVisualPlayPosition(
+                        waveformContainer.displayFrameIntervalMicros);
                 waveformContainer.displayedPlayPosition = visualPosition >= 0
                         ? visualPosition
                         : playPositionControl.value;

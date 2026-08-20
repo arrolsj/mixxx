@@ -116,9 +116,13 @@ PioneerDDJSX.scratchMode = [true, true, true, true];
 // This timer only detects that the MIDI ticks have gone quiet; it never generates movement.
 PioneerDDJSX.jogReleasePollMs = 25;
 PioneerDDJSX.jogReleaseQuietMs = 125;
+// Some controllers keep sending small non-zero ticks after touch release. Never let
+// that noise hold Mixxx in scratch mode indefinitely.
+PioneerDDJSX.jogReleaseMaxMs = 2000;
 PioneerDDJSX.jogReleasePending = [false, false, false, false];
 PioneerDDJSX.jogReleaseTimer = [0, 0, 0, 0];
 PioneerDDJSX.jogReleaseQuietElapsed = [0, 0, 0, 0];
+PioneerDDJSX.jogReleaseElapsed = [0, 0, 0, 0];
 PioneerDDJSX.jogLastDirection = [0, 0, 0, 0];
 PioneerDDJSX.jogWasPlaying = [false, false, false, false];
 PioneerDDJSX.wheelLedsBlinkStatus = [0, 0, 0, 0];
@@ -1019,6 +1023,16 @@ PioneerDDJSX.shiftButton = function(channel, control, value, status, group) {
 
 PioneerDDJSX.playButton = function(channel, control, value, status, group) {
     if (value) {
+        var deck = PioneerDDJSX.channelGroups ? PioneerDDJSX.channelGroups[group] : undefined;
+        if (engine.getValue(group, "scratch2_enable") > 0) {
+            // PLAY is an explicit transport command. A missing platter-touch
+            // release must not leave scratch mode owning the transport forever.
+            engine.setValue(group, "scratch2_enable", 0);
+            if (typeof deck === "number") {
+                PioneerDDJSX.cancelJogRelease(deck);
+                engine.scratchDisable(deck + 1, false);
+            }
+        }
         script.toggleControl(group, "play");
     }
 };
@@ -2196,12 +2210,16 @@ PioneerDDJSX.cancelJogRelease = function(deck) {
     }
     PioneerDDJSX.jogReleasePending[deck] = false;
     PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+    PioneerDDJSX.jogReleaseElapsed[deck] = 0;
 };
 
 PioneerDDJSX.releaseJogScratch = function(deck) {
     PioneerDDJSX.cancelJogRelease(deck);
     if (engine.isScratching(deck + 1)) {
-        engine.scratchDisable(deck + 1, true);
+        // A terminal release must not depend on an asynchronous ramp reaching
+        // an epsilon. Leaving scratch2 enabled at zero produces PLAY-without-
+        // transport if that ramp stalls.
+        engine.scratchDisable(deck + 1, false);
     }
 };
 
@@ -2213,23 +2231,14 @@ PioneerDDJSX.finishJogRelease = function(deck) {
     }
     PioneerDDJSX.jogReleasePending[deck] = false;
     PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+    PioneerDDJSX.jogReleaseElapsed[deck] = 0;
     if (timer) {
         engine.stopTimer(timer);
     }
     if (engine.isScratching(deck + 1)) {
-        var wasPlaying = PioneerDDJSX.jogWasPlaying[deck];
-        var backward = PioneerDDJSX.jogLastDirection[deck] < 0;
-        var group = "[Channel" + (deck + 1) + "]";
-        if (backward && wasPlaying) {
-            // scratchDisable latches its target from the current play state.
-            // Briefly expose the stopped state so the real backward tail ramps
-            // to zero, then restore play while scratch still owns the rate.
-            engine.setValue(group, "play", 0);
-        }
-        engine.scratchDisable(deck + 1, true);
-        if (backward && wasPlaying) {
-            engine.setValue(group, "play", 1);
-        }
+        // Finish atomically. An asynchronous zero-rate ramp can leave the deck
+        // reporting PLAY while scratch continues to own transport at 0 speed.
+        engine.scratchDisable(deck + 1, false);
     }
 };
 
@@ -2237,11 +2246,14 @@ PioneerDDJSX.scheduleJogRelease = function(deck) {
     PioneerDDJSX.cancelJogRelease(deck);
     PioneerDDJSX.jogReleasePending[deck] = true;
     PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+    PioneerDDJSX.jogReleaseElapsed[deck] = 0;
     PioneerDDJSX.jogReleaseTimer[deck] = engine.beginTimer(
         PioneerDDJSX.jogReleasePollMs,
         function() {
             PioneerDDJSX.jogReleaseQuietElapsed[deck] += PioneerDDJSX.jogReleasePollMs;
-            if (PioneerDDJSX.jogReleaseQuietElapsed[deck] >= PioneerDDJSX.jogReleaseQuietMs) {
+            PioneerDDJSX.jogReleaseElapsed[deck] += PioneerDDJSX.jogReleasePollMs;
+            if (PioneerDDJSX.jogReleaseQuietElapsed[deck] >= PioneerDDJSX.jogReleaseQuietMs ||
+                    PioneerDDJSX.jogReleaseElapsed[deck] >= PioneerDDJSX.jogReleaseMaxMs) {
                 PioneerDDJSX.finishJogRelease(deck);
             }
         }
