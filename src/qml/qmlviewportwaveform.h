@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QQmlEngine>
 #include <QQuickItem>
+#include <QTimer>
 
 #include "qml/qmlplayerproxy.h"
 #include "track/track.h"
@@ -113,11 +114,13 @@ class QmlViewportWaveform : public QQuickItem {
     void slotTrackLoading(TrackPointer pNewTrack, TrackPointer pOldTrack);
     void slotTrackUnloaded();
     void slotWaveformUpdated();
+    void slotWaveformProgressTimer();
     void slotBeatsUpdated();
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
     void refreshTrackEndPositionFromPlayer();
+    void updateProgressTimer();
     bool updateViewportMetrics();
 
     QPointer<QmlPlayerProxy> m_pPlayer;
@@ -126,6 +129,8 @@ class QmlViewportWaveform : public QQuickItem {
     waveform::WaveformBeatGridData m_beatGridData;
     audio::FramePos m_trackEndPosition{audio::kStartFramePos};
     waveform::WaveformRgbViewportMetrics m_viewportMetrics;
+    QTimer m_progressTimer;
+    int m_lastProgressCompletion{-1};
 
     double m_devicePixelRatio{1.0};
     double m_displayPosition{0.0};

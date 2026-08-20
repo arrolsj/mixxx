@@ -14,6 +14,8 @@
 
 namespace {
 
+constexpr int kProgressRefreshIntervalMillis = 67;
+
 bool fuzzyEqual(double left, double right) {
     return qFuzzyCompare(left + 1.0, right + 1.0);
 }
@@ -74,6 +76,12 @@ namespace mixxx::qml {
 QmlViewportWaveform::QmlViewportWaveform(QQuickItem* parent)
         : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
+    m_progressTimer.setInterval(kProgressRefreshIntervalMillis);
+    m_progressTimer.setTimerType(Qt::CoarseTimer);
+    connect(&m_progressTimer,
+            &QTimer::timeout,
+            this,
+            &QmlViewportWaveform::slotWaveformProgressTimer);
 }
 
 QmlPlayerProxy* QmlViewportWaveform::player() const {
@@ -371,8 +379,37 @@ void QmlViewportWaveform::slotWaveformUpdated() {
     m_pWaveform = m_pCurrentTrack != nullptr
             ? m_pCurrentTrack->getWaveform()
             : ConstWaveformPointer{};
+    m_lastProgressCompletion = m_pWaveform ? m_pWaveform->getCompletion() : -1;
+    updateProgressTimer();
     updateViewportMetrics();
     update();
+}
+
+void QmlViewportWaveform::slotWaveformProgressTimer() {
+    if (!m_pWaveform) {
+        m_progressTimer.stop();
+        return;
+    }
+
+    const int completion = m_pWaveform->getCompletion();
+    if (completion != m_lastProgressCompletion) {
+        m_lastProgressCompletion = completion;
+        update();
+    }
+    if (completion >= m_pWaveform->getDataSize()) {
+        m_progressTimer.stop();
+    }
+}
+
+void QmlViewportWaveform::updateProgressTimer() {
+    if (!m_pWaveform || m_pWaveform->getDataSize() <= 0 ||
+            m_pWaveform->getCompletion() >= m_pWaveform->getDataSize()) {
+        m_progressTimer.stop();
+        return;
+    }
+    if (!m_progressTimer.isActive()) {
+        m_progressTimer.start();
+    }
 }
 
 void QmlViewportWaveform::slotBeatsUpdated() {
