@@ -204,6 +204,60 @@ PioneerDDJFLX4.beatjumpSizeForPad = {
     0x27: 8   // PAD 8
 };
 
+// LastCUE Box performance-pad state contract. Keep the numeric values shared
+// with the existing SX3 publisher so the product UI can consume either mapping.
+PioneerDDJFLX4.padModes = {
+    hotCue: 0,
+    sampler: 3,
+    beatLoop: 5,
+    beatJump: 8,
+};
+PioneerDDJFLX4.activePadMode = [
+    PioneerDDJFLX4.padModes.hotCue,
+    PioneerDDJFLX4.padModes.hotCue,
+];
+
+PioneerDDJFLX4.deckForPadModeStatus = function(status) {
+    if (status === 0x90) {
+        return 1;
+    }
+    if (status === 0x91) {
+        return 2;
+    }
+    return 0;
+};
+
+PioneerDDJFLX4.beatjumpPage = function() {
+    const baseSize = Math.abs(PioneerDDJFLX4.beatjumpSizeForPad[0x21]);
+    if (baseSize < 1) {
+        return 0;
+    }
+    if (baseSize > 1) {
+        return 2;
+    }
+    return 1;
+};
+
+PioneerDDJFLX4.publishPadMode = function(deck, mode, parameter) {
+    if (deck !== 1 && deck !== 2) {
+        return;
+    }
+    PioneerDDJFLX4.activePadMode[deck - 1] = mode;
+    engine.setValue("[LastCueGeneral]", "pad_mode_deck" + deck, mode);
+    engine.setValue("[LastCueGeneral]", "pad_parameter_deck" + deck, parameter || 0);
+};
+
+PioneerDDJFLX4.publishVisibleBeatjumpPages = function() {
+    for (let deck = 1; deck <= 2; ++deck) {
+        if (PioneerDDJFLX4.activePadMode[deck - 1] === PioneerDDJFLX4.padModes.beatJump) {
+            PioneerDDJFLX4.publishPadMode(
+                deck,
+                PioneerDDJFLX4.padModes.beatJump,
+                PioneerDDJFLX4.beatjumpPage());
+        }
+    }
+};
+
 PioneerDDJFLX4.quickJumpSize = 32;
 
 // Used for tempo slider
@@ -229,6 +283,9 @@ PioneerDDJFLX4.toggleLight = function(midiIn, active) {
 //
 
 PioneerDDJFLX4.init = function() {
+    PioneerDDJFLX4.publishPadMode(1, PioneerDDJFLX4.padModes.hotCue, 0);
+    PioneerDDJFLX4.publishPadMode(2, PioneerDDJFLX4.padModes.hotCue, 0);
+
     engine.setValue("[EffectRack1_EffectUnit1]", "show_focus", 1);
 
     engine.makeConnection("[Channel1]", "vu_meter", PioneerDDJFLX4.vuMeterUpdate);
@@ -656,6 +713,7 @@ PioneerDDJFLX4.increaseBeatjumpSizes = function(_channel, control, value, _statu
         PioneerDDJFLX4.beatjumpSizeForPad[pad] = PioneerDDJFLX4.beatjumpSizeForPad[pad] * 16;
     });
     engine.setValue(group, "beatjump_size", PioneerDDJFLX4.beatjumpSizeForPad[0x21]);
+    PioneerDDJFLX4.publishVisibleBeatjumpPages();
 };
 
 PioneerDDJFLX4.decreaseBeatjumpSizes = function(_channel, control, value, _status, group) {
@@ -666,6 +724,7 @@ PioneerDDJFLX4.decreaseBeatjumpSizes = function(_channel, control, value, _statu
         PioneerDDJFLX4.beatjumpSizeForPad[pad] = PioneerDDJFLX4.beatjumpSizeForPad[pad] / 16;
     });
     engine.setValue(group, "beatjump_size", PioneerDDJFLX4.beatjumpSizeForPad[0x21]);
+    PioneerDDJFLX4.publishVisibleBeatjumpPages();
 };
 
 //
@@ -700,7 +759,17 @@ PioneerDDJFLX4.samplerPlayOutputCallbackFunction = function(value, group, _contr
 };
 
 PioneerDDJFLX4.padModeKeyPressed = function(_channel, _control, value, _status, _group) {
-    const deck = (_status === 0x90 ? PioneerDDJFLX4.lights.deck1 : PioneerDDJFLX4.lights.deck2);
+    if (value === 0) {
+        return;
+    }
+
+    const deckNumber = PioneerDDJFLX4.deckForPadModeStatus(_status);
+    if (deckNumber === 0) {
+        return;
+    }
+    const deck = deckNumber === 1 ? PioneerDDJFLX4.lights.deck1 : PioneerDDJFLX4.lights.deck2;
+    let mode = PioneerDDJFLX4.padModes.hotCue;
+    let parameter = 0;
 
     if (_control === 0x1B) {
         PioneerDDJFLX4.toggleLight(deck.hotcueMode, true);
@@ -712,13 +781,23 @@ PioneerDDJFLX4.padModeKeyPressed = function(_channel, _control, value, _status, 
         PioneerDDJFLX4.toggleLight(deck.padFX2Mode, true);
     } else if (_control === 0x20) {
         PioneerDDJFLX4.toggleLight(deck.beatJumpMode, true);
+        mode = PioneerDDJFLX4.padModes.beatJump;
+        parameter = PioneerDDJFLX4.beatjumpPage();
     } else if (_control === 0x6D) {
         PioneerDDJFLX4.toggleLight(deck.beatLoopMode, true);
+        mode = PioneerDDJFLX4.padModes.beatLoop;
     } else if (_control === 0x22) {
         PioneerDDJFLX4.toggleLight(deck.samplerMode, true);
+        mode = PioneerDDJFLX4.padModes.sampler;
     } else if (_control === 0x6F) {
         PioneerDDJFLX4.toggleLight(deck.keyShiftMode, true);
+    } else {
+        return;
     }
+
+    // Secondary FLX4 pad modes are not implemented by this Mixxx mapping.
+    // Publish Hot Cue for them as the product's safe read-only fallback.
+    PioneerDDJFLX4.publishPadMode(deckNumber, mode, parameter);
 };
 
 PioneerDDJFLX4.samplerPadPressed = function(_channel, _control, value, _status, group) {
