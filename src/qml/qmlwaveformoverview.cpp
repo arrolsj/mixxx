@@ -84,6 +84,19 @@ void QmlWaveformOverview::setChannels(QmlWaveformOverview::Channels channels) {
     emit channelsChanged(channels);
 }
 
+QmlWaveformOverview::Renderer QmlWaveformOverview::getRenderer() const {
+    return m_renderer;
+}
+
+void QmlWaveformOverview::setRenderer(Renderer renderer) {
+    if (m_renderer == renderer) {
+        return;
+    }
+    m_renderer = renderer;
+    emit rendererChanged(renderer);
+    update();
+}
+
 void QmlWaveformOverview::slotTrackLoaded(TrackPointer pTrack) {
     // TODO: Investigate if it's a bug that this debug assertion fails when
     // passing tracks on the command line

@@ -153,11 +153,23 @@ TEST(WaveformBeatGridSamplerTest, GeometryIsBoundedByLinesAndPhysicalHeight) {
     constexpr double kLogicalHeight = 128.0;
 
     for (const double dpr : std::array<double, 2>{1.0, 2.0}) {
-        const std::size_t dashCount = waveformBeatGridDashCount(
+        const std::size_t rectangleCount = waveformBeatGridRectangleCount(
                 lines, kLogicalHeight, dpr);
-        const std::size_t maximumPerLine = static_cast<std::size_t>(
-                std::ceil(kLogicalHeight * dpr / 12.0));
-        EXPECT_LE(dashCount, lines.size() * maximumPerLine);
+        EXPECT_EQ(lines.size() * 2, rectangleCount);
+    }
+}
+
+TEST(WaveformBeatGridSamplerTest,
+        DownbeatsKeepDashesWhileOrdinaryBeatsUseEdgeMarkers) {
+    const std::vector<WaveformBeatGridLine> lines{
+            {0.0f, false}, {10.0f, true}, {20.0f, false}};
+    constexpr double kLogicalHeight = 128.0;
+
+    for (const double dpr : std::array<double, 2>{1.0, 2.0}) {
+        const std::size_t expected = 4U + static_cast<std::size_t>(
+                waveformBeatGridDashCount(kLogicalHeight, dpr, true));
+        EXPECT_EQ(expected,
+                waveformBeatGridRectangleCount(lines, kLogicalHeight, dpr));
     }
 }
 

@@ -20,6 +20,7 @@ Item {
     property color loopCueColor: "#F8A030"
     property color mainCueColor: "#F8A030"
     property real waveformZoom: zoomControl.value
+    property real playMarkerPosition: 0.5
     property bool beatGridDownbeatsOnly: false
     property string waveformMode: "RGB"
 
@@ -127,7 +128,7 @@ Item {
             displayPosition: waveformContainer.displayedPlayPosition
             zoom: root.waveformZoom
             rateRatio: rateRatioControl.value
-            playMarkerPosition: playMarker.screenPosition
+            playMarkerPosition: root.playMarkerPosition
             axesColor: "#FFFFFF"
             highColor: "#0000FF"
             midColor: "#00FF00"
@@ -238,7 +239,7 @@ Item {
         ShapePath {
             id: playMarker
 
-            property real screenPosition: 0.5
+            property real screenPosition: root.playMarkerPosition
 
             startX: playMarkerShape.width * playMarker.screenPosition
             startY: 0

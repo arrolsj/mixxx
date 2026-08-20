@@ -159,14 +159,16 @@ inline int waveformBeatGridDashCount(
             logicalHeight / (patternLength * strokeWidth)));
 }
 
-inline std::size_t waveformBeatGridDashCount(
+inline std::size_t waveformBeatGridRectangleCount(
         const std::vector<WaveformBeatGridLine>& lines,
         double logicalHeight,
         double devicePixelRatio) {
     std::size_t count = 0;
     for (const auto& line : lines) {
-        count += static_cast<std::size_t>(waveformBeatGridDashCount(
-                logicalHeight, devicePixelRatio, line.isDownbeat));
+        count += line.isDownbeat
+                ? static_cast<std::size_t>(waveformBeatGridDashCount(
+                          logicalHeight, devicePixelRatio, true))
+                : 2U;
     }
     return count;
 }

@@ -476,7 +476,7 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                       m_beatGridDownbeatsOnly)
             : std::vector<waveform::WaveformBeatGridLine>{};
     const std::size_t beatGridRectangleCount =
-            waveform::waveformBeatGridDashCount(
+            waveform::waveformBeatGridRectangleCount(
                     beatGridLines, height(), m_devicePixelRatio);
 
     auto* pNode = static_cast<QSGGeometryNode*>(pOldNode);
@@ -511,29 +511,6 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
     const float logicalHeight = static_cast<float>(height());
     const float beatGridStrokeWidth =
             static_cast<float>(2.0 / m_devicePixelRatio);
-    for (const auto& line : beatGridLines) {
-        const PremultipliedColor color = toPremultipliedColor(
-                line.isDownbeat ? m_downbeatColor : m_beatColor,
-                line.isDownbeat ? 0.9 : 0.65);
-        const float dashLength = beatGridStrokeWidth *
-                (line.isDownbeat ? 4.0f : 3.0f);
-        const float dashPeriod = dashLength + beatGridStrokeWidth * 3.0f;
-        const int dashCount = waveform::waveformBeatGridDashCount(
-                height(), m_devicePixelRatio, line.isDownbeat);
-        for (int dash = 0; dash < dashCount; ++dash) {
-            const float top = dash * dashPeriod;
-            addRectangle(pVertices,
-                    &vertexIndex,
-                    line.x - beatGridStrokeWidth / 2.0f,
-                    top,
-                    line.x + beatGridStrokeWidth / 2.0f,
-                    std::min(top + dashLength, logicalHeight),
-                    color.red,
-                    color.green,
-                    color.blue,
-                    color.alpha);
-        }
-    }
 
     const float logicalWidth = static_cast<float>(
             viewport.physicalWidth / m_devicePixelRatio);
@@ -618,6 +595,50 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                     color.green,
                     color.blue,
                     255);
+        }
+    }
+
+    // Grid markers are intentionally appended after the waveform so the red
+    // downbeat remains visible above dense peaks. Ordinary beats only mark the
+    // top and bottom edges instead of crossing the waveform body.
+    for (const auto& line : beatGridLines) {
+        const PremultipliedColor color = toPremultipliedColor(
+                line.isDownbeat ? m_downbeatColor : m_beatColor,
+                line.isDownbeat ? 0.9 : 0.65);
+        if (!line.isDownbeat) {
+            const float markerLength = beatGridStrokeWidth * 3.0f;
+            for (const float top :
+                    {0.0f, std::max(0.0f, logicalHeight - markerLength)}) {
+                addRectangle(pVertices,
+                        &vertexIndex,
+                        line.x - beatGridStrokeWidth / 2.0f,
+                        top,
+                        line.x + beatGridStrokeWidth / 2.0f,
+                        std::min(top + markerLength, logicalHeight),
+                        color.red,
+                        color.green,
+                        color.blue,
+                        color.alpha);
+            }
+            continue;
+        }
+
+        const float dashLength = beatGridStrokeWidth * 4.0f;
+        const float dashPeriod = dashLength + beatGridStrokeWidth * 3.0f;
+        const int dashCount = waveform::waveformBeatGridDashCount(
+                height(), m_devicePixelRatio, true);
+        for (int dash = 0; dash < dashCount; ++dash) {
+            const float top = dash * dashPeriod;
+            addRectangle(pVertices,
+                    &vertexIndex,
+                    line.x - beatGridStrokeWidth / 2.0f,
+                    top,
+                    line.x + beatGridStrokeWidth / 2.0f,
+                    std::min(top + dashLength, logicalHeight),
+                    color.red,
+                    color.green,
+                    color.blue,
+                    color.alpha);
         }
     }
 
