@@ -60,6 +60,35 @@ $sourceRoot = Join-Path $CacheRoot $sourceDirectoryName
 if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
     Expand-Archive -LiteralPath $archivePath -DestinationPath $CacheRoot
 }
+
+$defaultStylePath = Join-Path $sourceRoot 'src\styles\builtin\default\style.qml'
+$defaultStyle = [System.IO.File]::ReadAllText($defaultStylePath)
+if ($defaultStyle.Contains('keyboardDesignHeight: 800')) {
+    $defaultStyle = $defaultStyle.Replace(
+        'keyboardDesignHeight: 800',
+        'keyboardDesignHeight: 640'
+    )
+} elseif (-not $defaultStyle.Contains('keyboardDesignHeight: 640')) {
+    throw 'Unable to set the Qt Virtual Keyboard design height.'
+}
+$candidatePattern = '(?s)(id: selectionListLabel.*?pixelSize:\s*)44(\s*\*\s*scaleHint)'
+$candidateConfiguredPattern = (
+    '(?s)id: selectionListLabel.*?pixelSize:\s*60\s*\*\s*scaleHint'
+)
+if ([regex]::IsMatch($defaultStyle, $candidateConfiguredPattern)) {
+    # Already configured by an earlier build.
+} elseif ([regex]::IsMatch($defaultStyle, $candidatePattern)) {
+    $defaultStyle = [regex]::Replace(
+        $defaultStyle,
+        $candidatePattern,
+        '${1}60${2}',
+        1
+    )
+} else {
+    throw 'Unable to set the Qt Virtual Keyboard candidate font size.'
+}
+[System.IO.File]::WriteAllText($defaultStylePath, $defaultStyle)
+
 $buildRoot = Join-Path $CacheRoot 'build'
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 
@@ -115,7 +144,7 @@ if (-not $validLanguageBlock.Success) {
 $disabledLanguages = [regex]::Matches(
     $validLanguageBlock.Groups['languages'].Value,
     '\b[a-z]{2}_[A-Z]{2}\b'
-) | ForEach-Object Value | Where-Object { $_ -ne 'en_US' }
+) | ForEach-Object Value | Where-Object { $_ -notin @('en_US', 'zh_CN') }
 
 $cmakeArguments = @(
     '-S', $sourceRoot,
@@ -133,15 +162,16 @@ $cmakeArguments = @(
     '-DFEATURE_3rdparty_hunspell=OFF',
     '-DFEATURE_system_hunspell=OFF',
     '-DFEATURE_openwnn=OFF',
-    '-DFEATURE_pinyin=OFF',
+    '-DFEATURE_pinyin=ON',
     '-DFEATURE_tcime=OFF',
     '-DFEATURE_zhuyin=OFF',
     '-DFEATURE_cangjie=OFF',
     '-DFEATURE_hangul=OFF',
     '-DFEATURE_thai=OFF',
-    '-DFEATURE_vkb_no_bundle_pinyin=ON',
+    '-DFEATURE_vkb_no_bundle_pinyin=OFF',
     '-DFEATURE_vkb_no_bundle_tcime=ON',
-    '-DFEATURE_vkb_lang_en_US=ON'
+    '-DFEATURE_vkb_lang_en_US=ON',
+    '-DFEATURE_vkb_lang_zh_CN=ON'
 )
 foreach ($language in $disabledLanguages) {
     $cmakeArguments += "-DFEATURE_vkb_lang_$language=OFF"
@@ -165,6 +195,9 @@ $requiredArtifacts = @(
     (Join-Path $qtRoot 'bin\Qt6VirtualKeyboard.dll'),
     (Join-Path $qtRoot 'Qt6\qml\QtQuick\VirtualKeyboard\qmldir'),
     (Join-Path $qtRoot (
+        'Qt6\qml\QtQuick\VirtualKeyboard\Plugins\Pinyin\qtvkbpinyinplugin.dll'
+    )),
+    (Join-Path $qtRoot (
         'Qt6\plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll'
     ))
 )
@@ -174,6 +207,6 @@ foreach ($artifact in $requiredArtifacts) {
     }
 }
 
-Write-Host "Qt Virtual Keyboard $qtVersion installed for LastCUE P1."
+Write-Host "Qt Virtual Keyboard $qtVersion installed for LastCUE Box Windows."
 Write-Host "Source SHA256: $sourceSha256"
 $requiredArtifacts | ForEach-Object { Write-Host "  $_" }
