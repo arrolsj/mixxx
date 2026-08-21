@@ -9,6 +9,7 @@
 #include "util/types.h"
 
 class EngineFilterBiquad1Low;
+class EngineFilterBiquad1High;
 
 class ColorNoiseGroupState final : public EffectState {
   public:
@@ -16,11 +17,14 @@ class ColorNoiseGroupState final : public EffectState {
     ~ColorNoiseGroupState() override;
 
     CSAMPLE_GAIN previousColor;
-    double cutoff;
+    double lowPassCutoff;
+    double highPassCutoff;
     mixxx::SampleBuffer noiseBuffer;
-    mixxx::SampleBuffer filteredNoiseBuffer;
+    mixxx::SampleBuffer lowPassBuffer;
+    mixxx::SampleBuffer highPassBuffer;
     std::mt19937 generator;
     std::unique_ptr<EngineFilterBiquad1Low> lowPassFilter;
+    std::unique_ptr<EngineFilterBiquad1High> highPassFilter;
 };
 
 class ColorNoiseEffect : public EffectProcessorImpl<ColorNoiseGroupState> {

@@ -17,6 +17,9 @@ class ColorDubEchoGroupState final : public EffectState {
     int previousDelaySamples;
     int writePosition;
     mixxx::SampleBuffer delayBuffer;
+    mixxx::SampleBuffer lowPassState;
+    mixxx::SampleBuffer highPassInputState;
+    mixxx::SampleBuffer highPassOutputState;
 };
 
 class ColorDubEchoEffect : public EffectProcessorImpl<ColorDubEchoGroupState> {

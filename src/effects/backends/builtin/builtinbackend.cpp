@@ -8,6 +8,7 @@
 #include "effects/backends/builtin/bitcrushereffect.h"
 #include "effects/backends/builtin/colorcrusheffect.h"
 #include "effects/backends/builtin/colordubechoeffect.h"
+#include "effects/backends/builtin/colorfiltereffect.h"
 #include "effects/backends/builtin/colornoiseeffect.h"
 #include "effects/backends/builtin/filtereffect.h"
 #include "effects/backends/builtin/flangereffect.h"
@@ -53,6 +54,7 @@ BuiltInBackend::BuiltInBackend() {
     registerEffect<BalanceEffect>();
     registerEffect<ColorCrushEffect>();
     registerEffect<ColorDubEchoEffect>();
+    registerEffect<ColorFilterEffect>();
     registerEffect<ColorNoiseEffect>();
     // Fancy effects
     registerEffect<FlangerEffect>();

@@ -15,11 +15,8 @@ class ColorCrushGroupState final : public EffectState {
     ~ColorCrushGroupState() override;
 
     CSAMPLE_GAIN previousColor;
-    CSAMPLE heldLeft;
-    CSAMPLE heldRight;
-    CSAMPLE accumulator;
     double highPassCutoff;
-    double previousRightAmount;
+    double previousLeftAmount;
     mixxx::SampleBuffer crushedBuffer;
     mixxx::SampleBuffer filteredBuffer;
     std::unique_ptr<EngineFilterBiquad1High> highPassFilter;
