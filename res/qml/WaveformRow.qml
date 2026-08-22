@@ -24,6 +24,7 @@ Item {
     property bool beatGridDownbeatsOnly: false
     property string waveformMode: "RGB"
     readonly property bool visualPositionUpdateRequired: deckPlayer.isLoaded
+    readonly property bool waveformRefreshRequired: visualPositionUpdateRequired
 
     function refreshVisualPosition() {
         if (!visualPositionUpdateRequired)
@@ -33,6 +34,10 @@ Item {
         waveformContainer.displayedPlayPosition = visualPosition >= 0
                 ? visualPosition
                 : playPositionControl.value;
+    }
+
+    function refreshWaveform() {
+        refreshVisualPosition();
     }
 
     Item {
