@@ -101,11 +101,12 @@ Item {
         // calculation used by the stable QWidget waveform; no QML-side velocity
         // estimation or correction is applied.
         property real displayedPlayPosition: playPositionControl.value
-        readonly property int displayFrameIntervalMicros: 16667
+        readonly property int displayFrameIntervalMicros: 17134
 
         // A/B experiment: continue triggering from the actual Qt Quick frame
         // clock, but keep the VisualPlayPosition projection horizon fixed at
-        // 60 Hz. This isolates projection-horizon variation from render cadence.
+        // the measured 58.363087 Hz display period. This isolates projection-
+        // horizon variation from render cadence.
         FrameAnimation {
             running: root.deckPlayer.isLoaded
             onTriggered: {
