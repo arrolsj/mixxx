@@ -137,6 +137,7 @@ void QmlWaveformOverview::setCurrentTrack(TrackPointer pTrack) {
     }
 
     m_pCurrentTrack = pTrack;
+    m_pProgressWaveform.reset();
     if (pTrack != nullptr) {
         connect(pTrack.get(),
                 &Track::waveformSummaryUpdated,
@@ -150,9 +151,16 @@ void QmlWaveformOverview::slotWaveformUpdated() {
     const TrackPointer pTrack = m_pCurrentTrack;
     const ConstWaveformPointer pWaveform =
             pTrack ? pTrack->getWaveformSummary() : ConstWaveformPointer{};
+    const bool isExistingProgressWaveform =
+            pWaveform && pWaveform == m_pProgressWaveform;
+    m_pProgressWaveform = pWaveform;
     m_lastProgressCompletion = pWaveform ? pWaveform->getCompletion() : -1;
     updateProgressTimer();
-    invalidatePaintedProgress();
+    if (isExistingProgressWaveform) {
+        updateProgress(m_lastProgressCompletion, pWaveform->getDataSize());
+    } else {
+        invalidatePaintedProgress();
+    }
 }
 
 void QmlWaveformOverview::slotWaveformProgressTimer() {

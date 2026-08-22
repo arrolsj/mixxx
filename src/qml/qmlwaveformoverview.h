@@ -93,6 +93,7 @@ class QmlWaveformOverview : public QQuickPaintedItem {
 
     QPointer<QmlPlayerProxy> m_pPlayer;
     TrackPointer m_pCurrentTrack;
+    ConstWaveformPointer m_pProgressWaveform;
     Channels m_channels;
     Renderer m_renderer;
     QColor m_colorHigh;
