@@ -29,12 +29,67 @@ Item {
     property real previousDiagnosticElapsedSeconds: -1
     property real stagnantDiagnosticStartSeconds: -1
     property bool positionStallCandidateLogged: false
+    property real pixelWindowStartSeconds: -1
+    property real pixelWindowStartX: NaN
+    property bool pixelStallCandidateLogged: false
 
     function resetPositionStallDiagnostics() {
         previousDiagnosticPosition = NaN;
         previousDiagnosticElapsedSeconds = -1;
         stagnantDiagnosticStartSeconds = -1;
         positionStallCandidateLogged = false;
+        pixelWindowStartSeconds = -1;
+        pixelWindowStartX = NaN;
+        pixelStallCandidateLogged = false;
+    }
+
+    function observeWaveformPixel(position, monotonicElapsedSeconds) {
+        const contentX = viewportWaveform.contentX;
+        if (!isFinite(contentX) || pixelWindowStartSeconds < 0 ||
+                !isFinite(pixelWindowStartX)) {
+            pixelWindowStartSeconds = monotonicElapsedSeconds;
+            pixelWindowStartX = contentX;
+            pixelStallCandidateLogged = false;
+            return;
+        }
+
+        const windowSeconds = monotonicElapsedSeconds - pixelWindowStartSeconds;
+        if (windowSeconds < 0.03)
+            return;
+
+        // The viewport's rateRatio scaling keeps nominal scroll speed at
+        // 441 visual frames/second divided by zoom, independent of pitch.
+        const expectedPixels = windowSeconds * 441 / root.waveformZoom;
+        const actualPixels = Math.abs(contentX - pixelWindowStartX);
+        if (expectedPixels > 0 && actualPixels < expectedPixels * 0.25) {
+            if (!pixelStallCandidateLogged) {
+                pixelStallCandidateLogged = true;
+                console.info("LASTCUE_STALL_WAVEFORM_PIXEL",
+                        "group=" + root.group,
+                        "window_ms=" + (windowSeconds * 1000).toFixed(3),
+                        "monotonic_s=" + monotonicElapsedSeconds.toFixed(6),
+                        "expected_px=" + expectedPixels.toFixed(3),
+                        "actual_px=" + actualPixels.toFixed(3),
+                        "content_x=" + contentX.toFixed(3),
+                        "position=" + position.toPrecision(17),
+                        "published=" + playPositionControl.value.toPrecision(17));
+            }
+            return;
+        }
+
+        if (pixelStallCandidateLogged) {
+            console.info("LASTCUE_STALL_WAVEFORM_PIXEL_RECOVERY",
+                    "group=" + root.group,
+                    "duration_ms=" + (windowSeconds * 1000).toFixed(3),
+                    "monotonic_s=" + monotonicElapsedSeconds.toFixed(6),
+                    "expected_px=" + expectedPixels.toFixed(3),
+                    "actual_px=" + actualPixels.toFixed(3),
+                    "content_x=" + contentX.toFixed(3),
+                    "position=" + position.toPrecision(17));
+        }
+        pixelWindowStartSeconds = monotonicElapsedSeconds;
+        pixelWindowStartX = contentX;
+        pixelStallCandidateLogged = false;
     }
 
     function observeVisualPosition(position, monotonicElapsedSeconds) {
@@ -82,6 +137,7 @@ Item {
 
         previousDiagnosticPosition = position;
         previousDiagnosticElapsedSeconds = monotonicElapsedSeconds;
+        observeWaveformPixel(position, monotonicElapsedSeconds);
     }
 
     function refreshVisualPosition(monotonicElapsedSeconds) {
