@@ -1,6 +1,7 @@
 import "." as Skin
 import Mixxx 1.0 as Mixxx
 import QtQuick 2.12
+import QtQuick 6.4 as Quick64
 import QtQuick.Controls 2.12
 import "Theme"
 
@@ -16,6 +17,22 @@ ApplicationWindow {
     height: 1080
     color: Theme.backgroundColor
     visible: true
+
+    // Keep every loaded Deck on one Qt Quick frame callback. Each row still
+    // resolves its own VisualPlayPosition, so this experiment changes only
+    // QML frame-clock ownership and preserves the 17.134 ms projection horizon.
+    Quick64.FrameAnimation {
+        running: deck1waveform.visualPositionUpdateRequired ||
+                deck2waveform.visualPositionUpdateRequired ||
+                deck3waveform.visualPositionUpdateRequired ||
+                deck4waveform.visualPositionUpdateRequired
+        onTriggered: {
+            deck1waveform.refreshVisualPosition();
+            deck2waveform.refreshVisualPosition();
+            deck3waveform.refreshVisualPosition();
+            deck4waveform.refreshVisualPosition();
+        }
+    }
 
     Column {
         anchors.fill: parent

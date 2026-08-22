@@ -23,6 +23,17 @@ Item {
     property real playMarkerPosition: 0.5
     property bool beatGridDownbeatsOnly: false
     property string waveformMode: "RGB"
+    readonly property bool visualPositionUpdateRequired: deckPlayer.isLoaded
+
+    function refreshVisualPosition() {
+        if (!visualPositionUpdateRequired)
+            return;
+        const visualPosition = deckPlayer.getVisualPlayPosition(
+                waveformContainer.displayFrameIntervalMicros);
+        waveformContainer.displayedPlayPosition = visualPosition >= 0
+                ? visualPosition
+                : playPositionControl.value;
+    }
 
     Item {
         id: waveformContainer
@@ -102,21 +113,6 @@ Item {
         // estimation or correction is applied.
         property real displayedPlayPosition: playPositionControl.value
         readonly property int displayFrameIntervalMicros: 17134
-
-        // A/B experiment: continue triggering from the actual Qt Quick frame
-        // clock, but keep the VisualPlayPosition projection horizon fixed at
-        // the measured 58.363087 Hz display period. This isolates projection-
-        // horizon variation from render cadence.
-        FrameAnimation {
-            running: root.deckPlayer.isLoaded
-            onTriggered: {
-                const visualPosition = root.deckPlayer.getVisualPlayPosition(
-                        waveformContainer.displayFrameIntervalMicros);
-                waveformContainer.displayedPlayPosition = visualPosition >= 0
-                        ? visualPosition
-                        : playPositionControl.value;
-            }
-        }
 
         // Unlike the former whole-track ShaderEffect, this item always owns
         // exactly one column per physical viewport pixel. Each column is a
