@@ -53,6 +53,10 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     Channels getChannels() const;
     void setRenderer(Renderer renderer);
     Renderer getRenderer() const;
+
+  protected:
+    void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
+
   private slots:
     void slotTrackLoaded(TrackPointer pLoadedTrack);
     void slotTrackLoading(TrackPointer pNewTrack, TrackPointer pOldTrack);
@@ -74,6 +78,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
+    void invalidatePaintedProgress();
+    void updateProgress(int completion, int dataSize);
     void updateProgressTimer();
     void drawFiltered(QPainter* pPainter,
             Channels channels,
@@ -94,6 +100,7 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     QColor m_colorLow;
     QTimer m_progressTimer;
     int m_lastProgressCompletion;
+    int m_paintedProgressCompletion;
 };
 
 } // namespace qml

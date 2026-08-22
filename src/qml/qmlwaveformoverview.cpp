@@ -1,5 +1,8 @@
 #include "qml/qmlwaveformoverview.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "mixer/basetrackplayer.h"
 #include "moc_qmlwaveformoverview.cpp"
 #include "waveform/renderers/waveformrgbcolumnsampler.h"
@@ -20,7 +23,8 @@ QmlWaveformOverview::QmlWaveformOverview(QQuickItem* parent)
           m_colorHigh(0xFF0000),
           m_colorMid(0x00FF00),
           m_colorLow(0x0000FF),
-          m_lastProgressCompletion(-1) {
+          m_lastProgressCompletion(-1),
+          m_paintedProgressCompletion(0) {
     m_progressTimer.setInterval(kProgressRefreshIntervalMillis);
     m_progressTimer.setTimerType(Qt::CoarseTimer);
     connect(&m_progressTimer,
@@ -49,7 +53,7 @@ void QmlWaveformOverview::setPlayer(QmlPlayerProxy* pPlayer) {
         if (pTrackPlayer == nullptr) {
             qWarning() << "QmlWaveformOverview received a stale player proxy";
             emit playerChanged();
-            update();
+            invalidatePaintedProgress();
             return;
         }
         setCurrentTrack(pTrackPlayer->getLoadedTrack());
@@ -68,7 +72,7 @@ void QmlWaveformOverview::setPlayer(QmlPlayerProxy* pPlayer) {
     }
 
     emit playerChanged();
-    update();
+    invalidatePaintedProgress();
 }
 
 QmlWaveformOverview::Channels QmlWaveformOverview::getChannels() const {
@@ -82,6 +86,7 @@ void QmlWaveformOverview::setChannels(QmlWaveformOverview::Channels channels) {
 
     m_channels = channels;
     emit channelsChanged(channels);
+    invalidatePaintedProgress();
 }
 
 QmlWaveformOverview::Renderer QmlWaveformOverview::getRenderer() const {
@@ -94,7 +99,15 @@ void QmlWaveformOverview::setRenderer(Renderer renderer) {
     }
     m_renderer = renderer;
     emit rendererChanged(renderer);
-    update();
+    invalidatePaintedProgress();
+}
+
+void QmlWaveformOverview::geometryChange(
+        const QRectF& newGeometry, const QRectF& oldGeometry) {
+    QQuickPaintedItem::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size()) {
+        invalidatePaintedProgress();
+    }
 }
 
 void QmlWaveformOverview::slotTrackLoaded(TrackPointer pTrack) {
@@ -139,7 +152,7 @@ void QmlWaveformOverview::slotWaveformUpdated() {
             pTrack ? pTrack->getWaveformSummary() : ConstWaveformPointer{};
     m_lastProgressCompletion = pWaveform ? pWaveform->getCompletion() : -1;
     updateProgressTimer();
-    update();
+    invalidatePaintedProgress();
 }
 
 void QmlWaveformOverview::slotWaveformProgressTimer() {
@@ -154,11 +167,40 @@ void QmlWaveformOverview::slotWaveformProgressTimer() {
     const int completion = pWaveform->getCompletion();
     if (completion != m_lastProgressCompletion) {
         m_lastProgressCompletion = completion;
-        update();
+        updateProgress(completion, pWaveform->getDataSize());
     }
     if (completion >= pWaveform->getDataSize()) {
         m_progressTimer.stop();
     }
+}
+
+void QmlWaveformOverview::invalidatePaintedProgress() {
+    m_paintedProgressCompletion = 0;
+    update();
+}
+
+void QmlWaveformOverview::updateProgress(int completion, int dataSize) {
+    if (completion < m_paintedProgressCompletion) {
+        invalidatePaintedProgress();
+        return;
+    }
+    if (completion == m_paintedProgressCompletion) {
+        return;
+    }
+
+    // Keep a pending full repaint from being narrowed to a partial update.
+    if (m_paintedProgressCompletion == 0 || dataSize <= 0 ||
+            width() <= 0 || height() <= 0) {
+        update();
+        return;
+    }
+
+    const qreal startX =
+            m_paintedProgressCompletion * width() / dataSize;
+    const qreal endX = completion * width() / dataSize;
+    const QRect dirtyRect =
+            QRectF(startX, 0, endX - startX, height()).toAlignedRect();
+    update(dirtyRect);
 }
 
 void QmlWaveformOverview::updateProgressTimer() {
@@ -176,6 +218,10 @@ void QmlWaveformOverview::updateProgressTimer() {
 }
 
 void QmlWaveformOverview::paint(QPainter* pPainter) {
+    if (!pPainter->hasClipping()) {
+        m_paintedProgressCompletion = 0;
+    }
+
     TrackPointer pTrack = m_pCurrentTrack;
     if (!pTrack) {
         return;
@@ -191,9 +237,17 @@ void QmlWaveformOverview::paint(QPainter* pPainter) {
         return;
     }
 
-    constexpr int actualCompletion = 0;
+    int actualCompletion = 0;
+    if (pPainter->hasClipping() && width() > 0) {
+        const int clippedCompletion = static_cast<int>(std::floor(
+                pPainter->clipBoundingRect().left() * dataSize / width()));
+        actualCompletion = std::min(m_paintedProgressCompletion,
+                std::max(0, clippedCompletion / 2 * 2));
+    }
     // Always multiple of 2
-    const int waveformCompletion = pWaveform->getCompletion();
+    const int waveformCompletion = m_lastProgressCompletion >= 0
+            ? std::min(pWaveform->getCompletion(), m_lastProgressCompletion)
+            : pWaveform->getCompletion();
     // Test if there is some new to draw (at least of pixel width)
     const int completionIncrement = waveformCompletion - actualCompletion;
 
@@ -242,6 +296,7 @@ void QmlWaveformOverview::paint(QPainter* pPainter) {
         }
     }
     pPainter->restore();
+    m_paintedProgressCompletion = nextCompletion;
 }
 
 void QmlWaveformOverview::drawRgb(QPainter* pPainter,
