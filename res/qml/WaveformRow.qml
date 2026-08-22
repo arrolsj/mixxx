@@ -25,19 +25,81 @@ Item {
     property string waveformMode: "RGB"
     readonly property bool visualPositionUpdateRequired: deckPlayer.isLoaded
     readonly property bool waveformRefreshRequired: visualPositionUpdateRequired
+    property real previousDiagnosticPosition: NaN
+    property real previousDiagnosticElapsedSeconds: -1
+    property real stagnantDiagnosticStartSeconds: -1
+    property bool positionStallCandidateLogged: false
 
-    function refreshVisualPosition() {
-        if (!visualPositionUpdateRequired)
-            return;
-        const visualPosition = deckPlayer.getVisualPlayPosition(
-                waveformContainer.displayFrameIntervalMicros);
-        waveformContainer.displayedPlayPosition = visualPosition >= 0
-                ? visualPosition
-                : playPositionControl.value;
+    function resetPositionStallDiagnostics() {
+        previousDiagnosticPosition = NaN;
+        previousDiagnosticElapsedSeconds = -1;
+        stagnantDiagnosticStartSeconds = -1;
+        positionStallCandidateLogged = false;
     }
 
-    function refreshWaveform() {
-        refreshVisualPosition();
+    function observeVisualPosition(position, monotonicElapsedSeconds) {
+        if (!isFinite(position) || !isFinite(monotonicElapsedSeconds) ||
+                monotonicElapsedSeconds < 0 || playControl.value <= 0 ||
+                Math.abs(rateRatioControl.value) < 0.000001) {
+            resetPositionStallDiagnostics();
+            return;
+        }
+
+        const positionMoved = !isFinite(previousDiagnosticPosition) ||
+                Math.abs(position - previousDiagnosticPosition) > 0.000000000001;
+        if (positionMoved) {
+            if (positionStallCandidateLogged) {
+                const stagnantDurationMs = Math.max(0,
+                        (monotonicElapsedSeconds -
+                        stagnantDiagnosticStartSeconds) * 1000);
+                console.info("LASTCUE_STALL_VISUAL_POSITION_RECOVERY",
+                        "group=" + root.group,
+                        "duration_ms=" + stagnantDurationMs.toFixed(3),
+                        "monotonic_s=" + monotonicElapsedSeconds.toFixed(6),
+                        "previous=" + previousDiagnosticPosition.toPrecision(17),
+                        "current=" + position.toPrecision(17),
+                        "published=" + playPositionControl.value.toPrecision(17));
+            }
+            stagnantDiagnosticStartSeconds = -1;
+            positionStallCandidateLogged = false;
+        } else {
+            if (stagnantDiagnosticStartSeconds < 0)
+                stagnantDiagnosticStartSeconds = previousDiagnosticElapsedSeconds;
+            const stagnantDurationMs = Math.max(0,
+                    (monotonicElapsedSeconds -
+                    stagnantDiagnosticStartSeconds) * 1000);
+            if (!positionStallCandidateLogged && stagnantDurationMs > 30) {
+                positionStallCandidateLogged = true;
+                console.info("LASTCUE_STALL_VISUAL_POSITION",
+                        "group=" + root.group,
+                        "duration_ms=" + stagnantDurationMs.toFixed(3),
+                        "threshold_ms=30",
+                        "monotonic_s=" + monotonicElapsedSeconds.toFixed(6),
+                        "position=" + position.toPrecision(17),
+                        "published=" + playPositionControl.value.toPrecision(17));
+            }
+        }
+
+        previousDiagnosticPosition = position;
+        previousDiagnosticElapsedSeconds = monotonicElapsedSeconds;
+    }
+
+    function refreshVisualPosition(monotonicElapsedSeconds) {
+        if (!visualPositionUpdateRequired) {
+            resetPositionStallDiagnostics();
+            return;
+        }
+        const visualPosition = deckPlayer.getVisualPlayPosition(
+                waveformContainer.displayFrameIntervalMicros);
+        const displayedPosition = visualPosition >= 0
+                ? visualPosition
+                : playPositionControl.value;
+        waveformContainer.displayedPlayPosition = displayedPosition;
+        observeVisualPosition(displayedPosition, monotonicElapsedSeconds);
+    }
+
+    function refreshWaveform(monotonicElapsedSeconds) {
+        refreshVisualPosition(monotonicElapsedSeconds);
     }
 
     Item {
@@ -74,6 +136,13 @@ Item {
 
             group: root.group
             key: "rate_ratio"
+        }
+
+        Mixxx.ControlProxy {
+            id: playControl
+
+            group: root.group
+            key: "play"
         }
 
         Mixxx.ControlProxy {
