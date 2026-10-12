@@ -6,6 +6,7 @@
 #include <QQmlEngine>
 #include <QSet>
 #include <QStringList>
+#include <QTimer>
 
 #include "controllers/controller.h"
 
@@ -52,7 +53,7 @@ class QmlControllerStatus : public QAbstractListModel {
         return m_hasOpenController;
     }
     int deviceCount() const {
-        return static_cast<int>(m_controllers.size());
+        return static_cast<int>(m_devices.size());
     }
     QStringList detectedControllerNames() const;
     QStringList openControllerNames() const;
@@ -68,6 +69,9 @@ class QmlControllerStatus : public QAbstractListModel {
     // instances are still created through the public manager constructor.
     QmlControllerStatus();
     void replaceDevices(const QList<Controller*>& controllers);
+    // Apply a read-only ALSA sequencer inventory, independently of PortMidi's
+    // frozen table. Invalid snapshots retain the last successful inventory.
+    bool applyMidiTopology(const QByteArray& topology);
 
   private slots:
     void rebuildDevices();
@@ -82,11 +86,32 @@ class QmlControllerStatus : public QAbstractListModel {
     void setDeviceForcedDisconnected(
             const QString& deviceName, bool forcedDisconnected);
     void updateHasOpenController();
+    void rebuildDeviceRows();
+    void refreshMidiTopology();
+
+    struct DeviceRow {
+        QPointer<Controller> controller;
+        QString name;
+        bool input;
+        bool output;
+    };
+    struct MidiPort {
+        QString name;
+        bool input;
+        bool output;
+        bool operator==(const MidiPort& other) const {
+            return name == other.name && input == other.input && output == other.output;
+        }
+    };
 
     static inline ControllerManager* s_pControllerManager = nullptr;
 
     ControllerManager* const m_pManager;
     QList<QPointer<Controller>> m_controllers;
+    QList<DeviceRow> m_devices;
+    QList<MidiPort> m_midiPorts;
+    bool m_hasMidiTopology{false};
+    QTimer m_midiTopologyTimer;
     QSet<QString> m_forcedDisconnectedDeviceNames;
     bool m_hasOpenController;
 };

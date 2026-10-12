@@ -15,8 +15,9 @@ namespace {
 
 class FakeController final : public Controller {
   public:
-    FakeController(const QString& name, bool input, bool output)
-            : Controller(name) {
+    FakeController(const QString& name, bool input, bool output,
+            QString extension = QStringLiteral(".test.xml"))
+            : Controller(name), m_extension(std::move(extension)) {
         setInputDevice(input);
         setOutputDevice(output);
     }
@@ -28,7 +29,7 @@ class FakeController final : public Controller {
     }
 
     QString mappingExtension() override {
-        return QStringLiteral(".test.xml");
+        return m_extension;
     }
 
     void setMapping(std::shared_ptr<LegacyControllerMapping> pMapping) override {
@@ -65,6 +66,7 @@ class FakeController final : public Controller {
     }
 
   private:
+    QString m_extension;
     int open() override {
         setOpen(true);
         return 0;
@@ -85,6 +87,9 @@ class TestableQmlControllerStatus final
 
     void setControllers(const QList<Controller*>& controllers) {
         replaceDevices(controllers);
+    }
+    bool setMidiTopology(const QByteArray& topology) {
+        return applyMidiTopology(topology);
     }
 };
 
@@ -276,6 +281,94 @@ TEST_F(QmlControllerStatusTest,
     EXPECT_TRUE(status.hasOpenController());
     EXPECT_EQ(status.openControllerNames(),
             QStringList({QStringLiteral("PIONEER DJ DDJ-SX3")}));
+}
+
+TEST_F(QmlControllerStatusTest, DiscoversUnknownMidiWithoutOpeningOrMappingIt) {
+    TestableQmlControllerStatus status;
+    const QByteArray empty("Client info\nClient 0 : \"System\" [Kernel]\n"
+                           "  Port 1 : \"Announce\" (R-e-)\n");
+    ASSERT_TRUE(status.setMidiTopology(empty));
+    EXPECT_EQ(status.deviceCount(), 0);
+    const QByteArray plugged = empty +
+            "Client 32 : \"New DJ Device\" [Kernel]\n"
+            "  Port 0 : \"New DJ Device MIDI 1\" (RWeX)\n";
+    ASSERT_TRUE(status.setMidiTopology(plugged));
+    ASSERT_EQ(status.deviceCount(), 1);
+    EXPECT_EQ(status.detectedControllerNames(),
+            QStringList({QStringLiteral("New DJ Device MIDI 1")}));
+    EXPECT_FALSE(status.hasOpenController());
+    EXPECT_TRUE(status.openControllerNames().isEmpty());
+    EXPECT_TRUE(status.data(status.index(0, 0), status.MappingRole).toString().isEmpty());
+    EXPECT_TRUE(status.data(status.index(0, 0), status.InputRole).toBool());
+    EXPECT_TRUE(status.data(status.index(0, 0), status.OutputRole).toBool());
+
+    int resets = 0;
+    QObject::connect(&status, &QAbstractItemModel::modelReset,
+            &status, [&resets] { ++resets; });
+    ASSERT_TRUE(status.setMidiTopology(plugged));
+    EXPECT_EQ(resets, 0);
+    ASSERT_TRUE(status.setMidiTopology(empty));
+    EXPECT_EQ(status.deviceCount(), 0);
+    EXPECT_EQ(resets, 1);
+}
+
+TEST_F(QmlControllerStatusTest, InventoryPreservesOpenStreamsAndRemovesStaleMidiRows) {
+    FakeController midi(QStringLiteral("SX3 MIDI 1"), true, true,
+            QStringLiteral(".midi.xml"));
+    FakeController hid(QStringLiteral("HID Controller"), true, false);
+    midi.setOpened(true);
+    TestableQmlControllerStatus status;
+    status.setControllers({&midi, &hid});
+    const QByteArray present("Client info\nClient 24 : \"SX3\" [Kernel]\n"
+                             "  Port 0 : \"SX3 MIDI 1\" (RWeX)\n");
+    ASSERT_TRUE(status.setMidiTopology(present));
+    EXPECT_EQ(status.deviceCount(), 2); // no duplicate for the managed SX3
+    EXPECT_TRUE(status.hasOpenController());
+    ASSERT_TRUE(status.setMidiTopology(present +
+            "Client 40 : \"Unknown\" [Kernel]\n"
+            "  Port 0 : \"Unknown MIDI\" (RWeX)\n"));
+    EXPECT_EQ(status.deviceCount(), 3);
+    EXPECT_TRUE(midi.isOpen());
+    EXPECT_EQ(status.openControllerNames(), QStringList({QStringLiteral("SX3 MIDI 1")}));
+    ASSERT_TRUE(status.setMidiTopology("Client info\nClient 0 : \"System\" [Kernel]\n"));
+    EXPECT_EQ(status.detectedControllerNames(), QStringList({QStringLiteral("HID Controller")}));
+    EXPECT_FALSE(status.hasOpenController());
+    EXPECT_TRUE(midi.isOpen()); // inventory never closes native streams
+    ASSERT_TRUE(status.setMidiTopology(present));
+    EXPECT_EQ(status.deviceCount(), 2);
+}
+
+TEST_F(QmlControllerStatusTest, FiltersInternalPortsAndKeepsDirectionsAndUnicode) {
+    TestableQmlControllerStatus status;
+    ASSERT_TRUE(status.setMidiTopology(QStringLiteral(
+            "Client info\nClient 0 : \"System\" [Kernel]\n"
+            "  Port 0 : \"Timer\" (Rwe-)\n"
+            "Client 14 : \"Midi Through\" [Kernel]\n"
+            "  Port 0 : \"MIDI Through Port-0\" (RWe-)\n"
+            "Client 128 : \"Mixxx\" [User]\n"
+            "  Port 0 : \"port-0\" (rwe-)\n"
+            "Client 30 : \"Hardware\" [Kernel]\n"
+            "  Port 0 : \"控制器 Input\" (R-eX)\n"
+            "  Port 1 : \"LED Output\" (-WeX)\n").toLocal8Bit()));
+    ASSERT_EQ(status.deviceCount(), 2);
+    EXPECT_EQ(status.data(status.index(0, 0), status.NameRole).toString(),
+            QStringLiteral("控制器 Input"));
+    EXPECT_TRUE(status.data(status.index(0, 0), status.InputRole).toBool());
+    EXPECT_FALSE(status.data(status.index(0, 0), status.OutputRole).toBool());
+    EXPECT_FALSE(status.data(status.index(1, 0), status.InputRole).toBool());
+    EXPECT_TRUE(status.data(status.index(1, 0), status.OutputRole).toBool());
+}
+
+TEST_F(QmlControllerStatusTest, InvalidInventoryDoesNotErasePreviousDevices) {
+    TestableQmlControllerStatus status;
+    ASSERT_TRUE(status.setMidiTopology(
+            "Client info\nClient 24 : \"SX3\" [Kernel]\n"
+            "  Port 0 : \"SX3 MIDI 1\" (RWeX)\n"));
+    EXPECT_FALSE(status.setMidiTopology({}));
+    EXPECT_FALSE(status.setMidiTopology("Client info\n"));
+    EXPECT_FALSE(status.setMidiTopology(
+            "Client info\nClient 24 : \"SX3\" [Kernel]\n  Port 0 : \"truncated"));
+    EXPECT_EQ(status.deviceCount(), 1);
 }
 
 } // namespace

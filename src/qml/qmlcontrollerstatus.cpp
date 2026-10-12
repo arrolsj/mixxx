@@ -1,5 +1,8 @@
 #include "qml/qmlcontrollerstatus.h"
 
+#include <QFile>
+#include <QRegularExpression>
+
 #include <utility>
 
 #include "controllers/controllermanager.h"
@@ -48,6 +51,14 @@ QmlControllerStatus::QmlControllerStatus(
             this,
             &QmlControllerStatus::handleDeviceReconnected);
     rebuildDevices();
+#if defined(__LINUX__)
+    // Inspect system inventory without closing streams or reinitializing
+    // PortMidi. Discovery must never interrupt an already open controller.
+    connect(&m_midiTopologyTimer, &QTimer::timeout,
+            this, &QmlControllerStatus::refreshMidiTopology);
+    m_midiTopologyTimer.start(1000);
+    refreshMidiTopology();
+#endif
 }
 
 QmlControllerStatus::QmlControllerStatus()
@@ -69,30 +80,28 @@ QmlControllerStatus* QmlControllerStatus::create(
 }
 
 int QmlControllerStatus::rowCount(const QModelIndex& parent) const {
-    return parent.isValid() ? 0 : static_cast<int>(m_controllers.size());
+    return parent.isValid() ? 0 : deviceCount();
 }
 
 QVariant QmlControllerStatus::data(const QModelIndex& index, int role) const {
     if (!checkIndex(index, QAbstractItemModel::CheckIndexOption::IndexIsValid) ||
-            index.row() >= m_controllers.size()) {
+            index.row() >= m_devices.size()) {
         return {};
     }
-    Controller* pController = m_controllers.at(index.row());
-    if (!pController) {
-        return {};
-    }
+    const auto& device = m_devices.at(index.row());
+    Controller* pController = device.controller;
 
     switch (role) {
     case NameRole:
-        return pController->getName();
+        return device.name;
     case OpenRole:
         return isControllerOpen(pController);
     case InputRole:
-        return pController->isInputDevice();
+        return device.input;
     case OutputRole:
-        return pController->isOutputDevice();
+        return device.output;
     case MappingRole: {
-        const auto pMapping = pController->getMapping();
+        const auto pMapping = pController ? pController->getMapping() : nullptr;
         return pMapping ? pMapping->name() : QString();
     }
     default:
@@ -114,11 +123,11 @@ QStringList QmlControllerStatus::openControllerNames() const {
 
 QStringList QmlControllerStatus::controllerNames(bool openOnly) const {
     QStringList names;
-    for (const auto& pController : m_controllers) {
-        if (!pController || (openOnly && !isControllerOpen(pController))) {
+    for (const auto& device : m_devices) {
+        if (openOnly && !isControllerOpen(device.controller)) {
             continue;
         }
-        const QString name = pController->getName().trimmed();
+        const QString name = device.name.trimmed();
         if (!name.isEmpty() && !names.contains(name)) {
             names.append(name);
         }
@@ -132,7 +141,6 @@ void QmlControllerStatus::rebuildDevices() {
 
 void QmlControllerStatus::replaceDevices(
         const QList<Controller*>& controllers) {
-    beginResetModel();
     for (const auto& pController : std::as_const(m_controllers)) {
         if (pController) {
             disconnect(pController, nullptr, this, nullptr);
@@ -147,16 +155,106 @@ void QmlControllerStatus::replaceDevices(
                 this,
                 &QmlControllerStatus::handleOpenChanged);
     }
+    rebuildDeviceRows();
+}
+
+void QmlControllerStatus::rebuildDeviceRows() {
+    beginResetModel();
+    m_devices.clear();
+    QSet<QString> managedNames;
+    for (const auto& pController : std::as_const(m_controllers)) {
+        if (!pController) {
+            continue;
+        }
+        const QString name = pController->getName();
+        if (m_hasMidiTopology &&
+                pController->mappingExtension() == QStringLiteral(".midi.xml")) {
+            bool present = false;
+            for (const auto& port : std::as_const(m_midiPorts)) {
+                present |= port.name == name;
+            }
+            if (!present) {
+                continue;
+            }
+        }
+        managedNames.insert(name);
+        m_devices.append({pController, name,
+                pController->isInputDevice(), pController->isOutputDevice()});
+    }
+    for (const auto& port : std::as_const(m_midiPorts)) {
+        if (!managedNames.contains(port.name)) {
+            m_devices.append({nullptr, port.name, port.input, port.output});
+        }
+    }
     endResetModel();
     emit devicesChanged();
     emit controllerNamesChanged();
     updateHasOpenController();
 }
 
+void QmlControllerStatus::refreshMidiTopology() {
+    QFile file(QStringLiteral("/proc/asound/seq/clients"));
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        applyMidiTopology(file.readAll());
+    }
+}
+
+bool QmlControllerStatus::applyMidiTopology(const QByteArray& topology) {
+    if (!topology.startsWith("Client info\n")) {
+        return false;
+    }
+    static const QRegularExpression clientPattern(
+            QStringLiteral("^Client\\s+(\\d+)\\s*:"));
+    static const QRegularExpression portPattern(
+            QStringLiteral("^Port\\s+\\d+\\s*:\\s*\"(.*)\"\\s*\\(([Rr-])([Ww-])[e-][X-]\\)"));
+    QList<MidiPort> ports;
+    int client = -1;
+    bool sawClient = false;
+    for (const auto& rawLine : topology.split('\n')) {
+        const QString line = QString::fromLocal8Bit(rawLine).trimmed();
+        if (line == QStringLiteral("Client info")) {
+            continue;
+        }
+        const auto clientMatch = clientPattern.match(line);
+        if (clientMatch.hasMatch()) {
+            sawClient = true;
+            client = clientMatch.captured(1).toInt();
+            continue;
+        }
+        const auto portMatch = portPattern.match(line);
+        if (line.startsWith(QStringLiteral("Client ")) ||
+                (line.startsWith(QStringLiteral("Port ")) && !portMatch.hasMatch())) {
+            return false;
+        }
+        if (client <= 0 || !portMatch.hasMatch()) {
+            continue;
+        }
+        const QString name = portMatch.captured(1).trimmed();
+        const bool input = portMatch.captured(2) == QStringLiteral("R");
+        const bool output = portMatch.captured(3) == QStringLiteral("W");
+        // Uppercase R/W denotes subscribable ports. Lowercase application
+        // endpoints, System events and the built-in MIDI Through are not devices.
+        if (name.isEmpty() || (!input && !output) ||
+                name.startsWith(QStringLiteral("MIDI Through Port"), Qt::CaseInsensitive)) {
+            continue;
+        }
+        ports.append({name, input, output});
+    }
+    if (!sawClient) {
+        return false;
+    }
+    if (!m_hasMidiTopology || ports != m_midiPorts) {
+        m_hasMidiTopology = true;
+        m_midiPorts = std::move(ports);
+        rebuildDeviceRows();
+    }
+    return true;
+}
+
 void QmlControllerStatus::handleOpenChanged() {
     auto* pController = qobject_cast<Controller*>(sender());
-    for (int row = 0; row < m_controllers.size(); ++row) {
-        if (m_controllers.at(row) == pController) {
+    for (int row = 0; row < m_devices.size(); ++row) {
+        if (m_devices.at(row).controller == pController) {
             // ControllerManager applies the startup mapping immediately before
             // opening the device, without emitting mappingApplied.
             emit dataChanged(
@@ -169,9 +267,9 @@ void QmlControllerStatus::handleOpenChanged() {
 }
 
 void QmlControllerStatus::handleMappingApplied() {
-    if (!m_controllers.isEmpty()) {
+    if (!m_devices.isEmpty()) {
         emit dataChanged(
-                index(0, 0), index(m_controllers.size() - 1, 0), {MappingRole});
+                index(0, 0), index(m_devices.size() - 1, 0), {MappingRole});
     }
 }
 
@@ -211,8 +309,8 @@ void QmlControllerStatus::setDeviceForcedDisconnected(
         return;
     }
 
-    for (int row = 0; row < m_controllers.size(); ++row) {
-        const Controller* pController = m_controllers.at(row);
+    for (int row = 0; row < m_devices.size(); ++row) {
+        const Controller* pController = m_devices.at(row).controller;
         if (pController &&
                 sanitizeDeviceName(pController->getName()) ==
                         sanitizedDeviceName) {
@@ -225,8 +323,8 @@ void QmlControllerStatus::setDeviceForcedDisconnected(
 
 void QmlControllerStatus::updateHasOpenController() {
     bool hasOpenController = false;
-    for (const auto& pController : std::as_const(m_controllers)) {
-        if (isControllerOpen(pController)) {
+    for (const auto& device : std::as_const(m_devices)) {
+        if (isControllerOpen(device.controller)) {
             hasOpenController = true;
             break;
         }
