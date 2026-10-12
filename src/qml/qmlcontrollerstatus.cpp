@@ -51,7 +51,9 @@ QmlControllerStatus::QmlControllerStatus(
             this,
             &QmlControllerStatus::handleDeviceReconnected);
     rebuildDevices();
-#if defined(__LINUX__)
+#if defined(Q_OS_LINUX)
+    // This source belongs to the QML library, which does not inherit the
+    // engine target's __LINUX__ definition. Use Qt's platform contract.
     // Inspect system inventory without closing streams or reinitializing
     // PortMidi. Discovery must never interrupt an already open controller.
     connect(&m_midiTopologyTimer, &QTimer::timeout,
