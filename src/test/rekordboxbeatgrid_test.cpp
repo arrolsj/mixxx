@@ -85,7 +85,7 @@ QByteArray analyzeFile(quint32 firstBeatMs, quint32 cueMs) {
         stream << quint16((i + 2) % 4 + 1) << quint16(12000)
                << quint32(firstBeatMs + i * 500);
     }
-    const auto tags = analyzeTag("PQTZ", grid) + cueTag(false, cueMs) + cueTag(true, cueMs);
+    const QByteArray tags = analyzeTag("PQTZ", grid) + cueTag(false, cueMs) + cueTag(true, cueMs);
     QByteArray file;
     QDataStream fileStream(&file, QIODevice::WriteOnly);
     fileStream.writeRawData("PMAI", 4);
