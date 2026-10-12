@@ -1151,6 +1151,7 @@ void readAnalyze(TrackPointer track,
         mixxx::audio::SampleRate sampleRate,
         int timingOffset,
         bool ignoreCues,
+        bool readBeatGrid,
         const QString& anlzPath) {
     if (!QFile(anlzPath).exists()) {
         return;
@@ -1170,7 +1171,7 @@ void readAnalyze(TrackPointer track,
     for (const auto& section : *anlz.sections()) {
         switch (section->fourcc()) {
         case rekordbox_anlz_t::SECTION_TAGS_BEAT_GRID: {
-            if (!ignoreCues) {
+            if (!readBeatGrid) {
                 break;
             }
 
@@ -1547,12 +1548,11 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
                     .toString();
     QString anlzPathExt = anlzPath.left(anlzPath.length() - 3) + "EXT";
 
-    if (QFile(anlzPathExt).exists()) {
-        // Beatgrids appear to be only correct in legacy ANLZ file
-        readAnalyze(track, sampleRate, timingOffset, true, anlzPath);
-        readAnalyze(track, sampleRate, timingOffset, false, anlzPathExt);
-    } else {
-        readAnalyze(track, sampleRate, timingOffset, false, anlzPath);
+    const bool hasExtendedAnalyze = QFile(anlzPathExt).exists();
+    // Always take the beatgrid from DAT. Without EXT, DAT also supplies cues.
+    readAnalyze(track, sampleRate, timingOffset, hasExtendedAnalyze, true, anlzPath);
+    if (hasExtendedAnalyze) {
+        readAnalyze(track, sampleRate, timingOffset, false, false, anlzPathExt);
     }
 
     // Assume that the key of the file the has been analyzed in Recordbox is correct

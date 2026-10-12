@@ -6,14 +6,18 @@
 #include <QString>
 #include <QTest>
 #include <QtDebug>
+#include <vector>
 
 #include "control/controlobject.h"
+#include "engine/bufferscalers/enginebufferscalest.h"
 #include "engine/controls/ratecontrol.h"
+#include "engine/readaheadmanager.h"
 #include "mixer/basetrackplayer.h"
 #include "preferences/usersettings.h"
 #include "test/mixxxtest.h"
 #include "test/mockedenginebackendtest.h"
 #include "test/signalpathtest.h"
+#include "util/sample.h"
 
 // In case any of the test in this file fail. You can use the audioplot.py tool
 // in the tools folder to visually compare the results of the enginebuffer
@@ -21,6 +25,68 @@
 
 namespace {
 const QString kAppGroup = QStringLiteral("[App]");
+
+// A loop boundary may return zero once. A second zero makes the scaler pad
+// one input buffer with silence, then the reader resumes its audio stream.
+class SoundTouchPaddingReader : public ReadAheadManager {
+  public:
+    explicit SoundTouchPaddingReader(bool returnZero)
+            : m_returnZero(returnZero) {
+    }
+
+    SINT getNextSamples(double rate, CSAMPLE* buffer, SINT requestedSamples) override {
+        Q_UNUSED(rate);
+        if (m_reads++ < (m_returnZero ? 2 : 1)) {
+            SampleUtil::clear(buffer, requestedSamples);
+            return m_returnZero ? 0 : requestedSamples;
+        }
+        for (SINT i = 0; i < requestedSamples; ++i) {
+            // The signal period differs from the input buffer length and
+            // channels differ, so extra silent frames shift the output.
+            buffer[i] = static_cast<CSAMPLE>((m_samples++ % 10007) - 5003) / 10007;
+        }
+        return requestedSamples;
+    }
+
+    SINT samplesRead() const {
+        return m_samples;
+    }
+
+  private:
+    const bool m_returnZero;
+    int m_reads{0};
+    SINT m_samples{0};
+};
+
+class EngineBufferScaleSTTest : public MixxxTest {
+};
+
+TEST_F(EngineBufferScaleSTTest, RepeatedZeroReadPadsExactlyOneStereoBuffer) {
+    for (const double tempo : {0.75, 1.0, 1.25, -0.75, -1.25}) {
+        SCOPED_TRACE(tempo);
+        SoundTouchPaddingReader zeroReader(true);
+        SoundTouchPaddingReader silenceReader(false);
+        EngineBufferScaleST zeroScaler(&zeroReader);
+        EngineBufferScaleST silenceScaler(&silenceReader);
+        for (auto* scaler : {&zeroScaler, &silenceScaler}) {
+            scaler->setSampleRate(mixxx::audio::SampleRate(44100));
+            double tempoRatio = tempo;
+            double pitchRatio = 1.0;
+            scaler->setScaleParameters(1.0, &tempoRatio, &pitchRatio);
+            scaler->clear();
+        }
+
+        // Both paths use the linked SoundTouch library; no version-dependent
+        // golden audio or mock of its frames-based putSamples API is needed.
+        constexpr SINT kOutputSamples = 16384;
+        std::vector<CSAMPLE> actual(kOutputSamples);
+        std::vector<CSAMPLE> expected(kOutputSamples);
+        EXPECT_DOUBLE_EQ(silenceScaler.scaleBuffer(expected.data(), kOutputSamples),
+                zeroScaler.scaleBuffer(actual.data(), kOutputSamples));
+        EXPECT_EQ(silenceReader.samplesRead(), zeroReader.samplesRead());
+        EXPECT_EQ(expected, actual);
+    }
+}
 }
 
 class EngineBufferTest : public MockedEngineBackendTest {};
