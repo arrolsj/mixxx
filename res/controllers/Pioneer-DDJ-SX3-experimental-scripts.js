@@ -455,10 +455,10 @@ PioneerDDJSX.init = function(id) {
     };
 
     PioneerDDJSX.valueVuMeter = {
-        '[Channel1]_current': 0,
-        '[Channel2]_current': 0,
-        '[Channel3]_current': 0,
-        '[Channel4]_current': 0,
+        '[Channel1]_current': -192,
+        '[Channel2]_current': -192,
+        '[Channel3]_current': -192,
+        '[Channel4]_current': -192,
         '[Channel1]_enabled': 1,
         '[Channel2]_enabled': 1,
         '[Channel3]_enabled': 1,
@@ -698,8 +698,7 @@ PioneerDDJSX.bindDeckControlConnections = function(channelGroup, bind) {
             'playposition': 'PioneerDDJSX.wheelLeds',
             'pfl': 'PioneerDDJSX.headphoneCueLed',
             'bpm_tap': 'PioneerDDJSX.shiftHeadphoneCueLed',
-            'VuMeter': 'PioneerDDJSX.VuMeterLeds',
-            'peak_indicator': 'PioneerDDJSX.meterPeakLeds',
+            'peak_meter_db': 'PioneerDDJSX.VuMeterLeds',
             'keylock': 'PioneerDDJSX.keyLockLed',
             'slip_enabled': 'PioneerDDJSX.slipLed',
             'quantize': 'PioneerDDJSX.quantizeLed',
@@ -2128,24 +2127,27 @@ PioneerDDJSX.hotCueLeds = function(value, group, control) {
     }
 };
 
-PioneerDDJSX.channelMeterMidiValue = function(value, clipped) {
-    if (clipped) {
-        return 0;
+PioneerDDJSX.channelMeterMidiValue = function(value) {
+    if (typeof value !== "number" || !isFinite(value)) {
+        return 46;
     }
-    if (!isFinite(value) || value <= 0) {
-        return 0x7F;
+    // Native SX3 channel_level_db: truncate dB toward zero, then apply the
+    // ordered dB ranges and round the positive MIDI result. This consumes
+    // sample peak dBFS, never the clipped/normalized legacy VuMeter display.
+    var db = value < 0 ? Math.ceil(value) : Math.floor(value);
+    if (db >= -1) {
+        return 6;
     }
-    // SX3 General MIDI calibration: 48 is dark; 44/36/24/14/12/8
-    // light progressively higher segments, while 0 lights the clip top.
-    // Mixxx VuMeter is already logarithmic and smoothed (not linear PCM).
-    // Adapt its display range here, not in the shared audio meter or by
-    // changing audio gain. Other controllers require their own encoding.
-    return Math.round(48 - 40 * Math.min(value, 1));
-};
-
-PioneerDDJSX.meterPeakLeds = function(value, group, control) {
-    // Clipping may change while VuMeter remains saturated or unchanged.
-    PioneerDDJSX.VuMeterLeds(engine.getValue(group, "VuMeter"), group, control);
+    if (db >= -12) {
+        return Math.round(6 + (db + 1) * 9 / -11);
+    }
+    if (db >= -18) {
+        return Math.round(16 + (db + 12) * 2 / -6);
+    }
+    if (db >= -50) {
+        return Math.round(19 + (db + 18) * 26 / -32);
+    }
+    return 46;
 };
 
 PioneerDDJSX.VuMeterLeds = function(value, group, control) {
@@ -2154,30 +2156,26 @@ PioneerDDJSX.VuMeterLeds = function(value, group, control) {
         channel = 0x02,
         midiOut = 0x00;
 
-    PioneerDDJSX.valueVuMeter[group + "_current"] = value;
-    // resetDeck passes control=0 and must clear a held clip indication.
-    PioneerDDJSX.valueVuMeter[group + "_clip"] = control !== 0 &&
-        engine.getValue(group, "peak_indicator") > 0;
+    // resetDeck passes control=0. Zero dB is full scale, not silence.
+    PioneerDDJSX.valueVuMeter[group + "_current"] = control === 0 ? -192 : value;
 
     for (var index in PioneerDDJSX.channelGroups) {
         if (PioneerDDJSX.channelGroups.hasOwnProperty(index)) {
             midiOut = PioneerDDJSX.valueVuMeter[index + "_current"];
-            var clipped = PioneerDDJSX.valueVuMeter[index + "_clip"];
             if (PioneerDDJSX.twinkleVumeterAutodjOn) {
                 if (engine.getValue("[AutoDJ]", "enabled")) {
                     if (PioneerDDJSX.valueVuMeter[index + "_enabled"]) {
-                        midiOut = 0;
-                        clipped = false;
+                        midiOut = -192;
                     }
-                    if (midiOut < 0.1 && !PioneerDDJSX.valueVuMeter[index + "_enabled"]) {
-                        midiOut = 0.1;
+                    if (midiOut < -49 && !PioneerDDJSX.valueVuMeter[index + "_enabled"]) {
+                        midiOut = -49;
                     }
                 }
             }
             midi.sendShortMsg(
                 midiBaseAdress + PioneerDDJSX.channelGroups[index],
                 channel,
-                PioneerDDJSX.channelMeterMidiValue(midiOut, clipped)
+                PioneerDDJSX.channelMeterMidiValue(midiOut)
             );
         }
     }

@@ -1,5 +1,8 @@
 #include "engine/enginevumeter.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "audio/types.h"
 #include "moc_enginevumeter.cpp"
 #include "util/sample.h"
@@ -14,6 +17,7 @@ constexpr int kPeakDuration = 500; // in ms
 // Must be from 0-1 the lower the factor, the more smoothing that is applied
 constexpr CSAMPLE kAttackSmoothing = 1.0f; // .85
 constexpr CSAMPLE kDecaySmoothing = 0.1f;  //.16//.4
+constexpr double kPeakMeterFloorDb = -192.0;
 
 } // namespace
 
@@ -21,6 +25,7 @@ EngineVuMeter::EngineVuMeter(const QString& group, const QString& legacyGroup)
         : m_vuMeter(ConfigKey(group, QStringLiteral("vu_meter"))),
           m_vuMeterLeft(ConfigKey(group, QStringLiteral("vu_meter_left"))),
           m_vuMeterRight(ConfigKey(group, QStringLiteral("vu_meter_right"))),
+          m_peakMeterDb(ConfigKey(group, QStringLiteral("peak_meter_db"))),
           m_peakIndicator(ConfigKey(group, QStringLiteral("peak_indicator"))),
           m_peakIndicatorLeft(ConfigKey(group, QStringLiteral("peak_indicator_left"))),
           m_peakIndicatorRight(ConfigKey(group, QStringLiteral("peak_indicator_right"))),
@@ -45,11 +50,22 @@ void EngineVuMeter::process(CSAMPLE* pIn, const int iBufferSize) {
             &fVolSumR, pIn, iBufferSize);
     m_fRMSvolumeSumL += fVolSumL;
     m_fRMSvolumeSumR += fVolSumR;
+    // Observe only: never modify samples, gain, routing or the legacy VU.
+    // Interleaved max(abs(sample)) is max(left peak, right peak), not their
+    // average. Accumulate until publication so a short transient is not lost.
+    for (int i = 0; i < iBufferSize; ++i) {
+        m_windowPeak = std::max(m_windowPeak, std::abs(pIn[i]));
+    }
 
     m_samplesCalculated += static_cast<unsigned int>(iBufferSize / 2);
 
     // Are we ready to update the VU meter?:
     if (m_samplesCalculated > (sampleRate / kVuUpdateRate)) {
+        const double peakDb = m_windowPeak > 0
+                ? std::max(kPeakMeterFloorDb, 20.0 * std::log10(m_windowPeak))
+                : kPeakMeterFloorDb;
+        m_peakMeterDb.set(peakDb);
+        m_windowPeak = 0;
         doSmooth(m_fRMSvolumeL,
                 std::log10(SHRT_MAX * m_fRMSvolumeSumL / (m_samplesCalculated * 1000) + 1));
         doSmooth(m_fRMSvolumeR,
@@ -119,6 +135,8 @@ void EngineVuMeter::doSmooth(CSAMPLE &currentVolume, CSAMPLE newVolume)
 }
 
 void EngineVuMeter::reset() {
+    m_windowPeak = 0;
+    m_peakMeterDb.set(kPeakMeterFloorDb);
     m_vuMeter.set(0);
     m_vuMeterLeft.set(0);
     m_vuMeterRight.set(0);

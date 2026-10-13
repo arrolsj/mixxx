@@ -19,6 +19,9 @@ class EngineVuMeter : public EngineObject {
     ControlObject m_vuMeter;
     ControlObject m_vuMeterLeft;
     ControlObject m_vuMeterRight;
+    // Unclipped sample peak in dBFS, independent of the legacy display VU.
+    ControlObject m_peakMeterDb;
+    CSAMPLE m_windowPeak;
     CSAMPLE m_fRMSvolumeL;
     CSAMPLE m_fRMSvolumeSumL;
     CSAMPLE m_fRMSvolumeR;
