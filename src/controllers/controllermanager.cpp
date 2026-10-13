@@ -572,18 +572,21 @@ void ControllerManager::slotRetryDisconnectedDevices() {
         return;
     }
     qDebug() << "Retrying disconnected controller discovery";
+    // A stale enabled preset (for example the SX3 seed on a FLX4 setup) must
+    // not tear down the controller already in use on every reconnect tick.
+    if (mixxx::controllers::midiRefreshBlocked(getControllers(), false)) {
+        return;
+    }
     setUpDevices(true);
 }
 
 void ControllerManager::slotDiscoverPioneerControllers(const QStringList& inputNames) {
     DEBUG_ASSERT_QOBJECT_THREAD_AFFINITY(this);
     m_pioneerDiscovery.observe(inputNames);
-    bool blocked = !m_audioGatedReconnectDeviceNames.isEmpty();
     // PortMidi refresh closes every MIDI stream. Defer a new controller while
     // another controller is open, rather than interrupting an ongoing set.
-    for (Controller* controller : getControllers()) {
-        blocked |= controller->isOpen();
-    }
+    const bool blocked = mixxx::controllers::midiRefreshBlocked(
+            getControllers(), !m_audioGatedReconnectDeviceNames.isEmpty());
     bool discover = false;
     for (const QString& name : m_pioneerDiscovery.takeCandidates(blocked)) {
         const QString filename = mixxx::controllers::unconfiguredPioneerMapping(

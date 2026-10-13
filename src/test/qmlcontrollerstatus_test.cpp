@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "controllers/controller.h"
+#include "controllers/pioneerautomapping.h"
 #include "controllers/midi/legacymidicontrollermapping.h"
 #include "qml/qmlcontrollerstatus.h"
 #include "test/mixxxtest.h"
@@ -342,6 +343,25 @@ TEST_F(QmlControllerStatusTest, RequestsOnlyUnmanagedSupportedMidiInputs) {
     EXPECT_TRUE(requested.isEmpty());
     EXPECT_FALSE(status.setMidiTopology("broken"));
     EXPECT_EQ(requests, 5);
+}
+
+TEST_F(QmlControllerStatusTest, MidiRefreshPreservesOpenControllerDespiteAbsentEnabledSx3) {
+    FakeController flx4(QStringLiteral("DDJ-FLX4 MIDI 1"), true, true,
+            QStringLiteral(".midi.xml"));
+    FakeController absentSx3(QStringLiteral("PIONEER DJ DDJ-SX3 MIDI 1"), true, true,
+            QStringLiteral(".midi.xml"));
+    config()->setValue(ConfigKey("[Controller]", "PIONEER_DJ_DDJ-SX3_MIDI_1"), 1);
+    config()->setValue(ConfigKey("[ControllerPreset]", "PIONEER_DJ_DDJ-SX3_MIDI_1"),
+            QStringLiteral("Pioneer DDJ-SX3 Experimental.midi.xml"));
+    const QList<Controller*> devices{&flx4, &absentSx3};
+    flx4.setOpened(true);
+    for (int retry = 0; retry < 10; ++retry) {
+        EXPECT_TRUE(mixxx::controllers::midiRefreshBlocked(devices, false));
+    }
+    EXPECT_TRUE(flx4.isOpen());
+    flx4.setOpened(false);
+    EXPECT_TRUE(mixxx::controllers::midiRefreshBlocked(devices, true));
+    EXPECT_FALSE(mixxx::controllers::midiRefreshBlocked(devices, false));
 }
 
 TEST_F(QmlControllerStatusTest, InventoryPreservesOpenStreamsAndRemovesStaleMidiRows) {

@@ -7,10 +7,23 @@
 #include <QSet>
 
 #include "controllers/legacycontrollermapping.h"
+#include "controllers/controller.h"
 #include "controllers/legacycontrollermappingfilehandler.h"
 #include "preferences/usersettings.h"
 
 namespace mixxx::controllers {
+
+inline bool midiRefreshBlocked(const QList<Controller*>& controllers, bool audioGated) {
+    if (audioGated) {
+        return true;
+    }
+    for (Controller* controller : controllers) {
+        if (controller->isOpen()) {
+            return true;
+        }
+    }
+    return false;
+}
 
 inline QString pioneerMappingForInput(const QString& name, bool input) {
     // Match complete device/ALSA port names, never a substring or an output alias.
