@@ -699,6 +699,7 @@ PioneerDDJSX.bindDeckControlConnections = function(channelGroup, bind) {
             'pfl': 'PioneerDDJSX.headphoneCueLed',
             'bpm_tap': 'PioneerDDJSX.shiftHeadphoneCueLed',
             'VuMeter': 'PioneerDDJSX.VuMeterLeds',
+            'peak_indicator': 'PioneerDDJSX.meterPeakLeds',
             'keylock': 'PioneerDDJSX.keyLockLed',
             'slip_enabled': 'PioneerDDJSX.slipLed',
             'quantize': 'PioneerDDJSX.quantizeLed',
@@ -2127,40 +2128,56 @@ PioneerDDJSX.hotCueLeds = function(value, group, control) {
     }
 };
 
+PioneerDDJSX.channelMeterMidiValue = function(value, clipped) {
+    if (clipped) {
+        return 0;
+    }
+    if (!isFinite(value) || value <= 0) {
+        return 0x7F;
+    }
+    // SX3 General MIDI calibration: 48 is dark; 44/36/24/14/12/8
+    // light progressively higher segments, while 0 lights the clip top.
+    // Mixxx VuMeter is already logarithmic and smoothed (not linear PCM).
+    // Adapt its display range here, not in the shared audio meter or by
+    // changing audio gain. Other controllers require their own encoding.
+    return Math.round(48 - 40 * Math.min(value, 1));
+};
+
+PioneerDDJSX.meterPeakLeds = function(value, group, control) {
+    // Clipping may change while VuMeter remains saturated or unchanged.
+    PioneerDDJSX.VuMeterLeds(engine.getValue(group, "VuMeter"), group, control);
+};
+
 PioneerDDJSX.VuMeterLeds = function(value, group, control) {
     // Remark: Only deck vu meters can be controlled! Master vu meter is handled by hardware!
     var midiBaseAdress = 0xB0,
         channel = 0x02,
         midiOut = 0x00;
 
-    value = parseInt(value * 0x76); //full level indicator: 0x7F
-
-    if (engine.getValue(group, "peak_indicator")) {
-        value = value + 0x09;
-    }
-
     PioneerDDJSX.valueVuMeter[group + "_current"] = value;
+    // resetDeck passes control=0 and must clear a held clip indication.
+    PioneerDDJSX.valueVuMeter[group + "_clip"] = control !== 0 &&
+        engine.getValue(group, "peak_indicator") > 0;
 
     for (var index in PioneerDDJSX.channelGroups) {
         if (PioneerDDJSX.channelGroups.hasOwnProperty(index)) {
             midiOut = PioneerDDJSX.valueVuMeter[index + "_current"];
+            var clipped = PioneerDDJSX.valueVuMeter[index + "_clip"];
             if (PioneerDDJSX.twinkleVumeterAutodjOn) {
                 if (engine.getValue("[AutoDJ]", "enabled")) {
                     if (PioneerDDJSX.valueVuMeter[index + "_enabled"]) {
                         midiOut = 0;
+                        clipped = false;
                     }
-                    if (midiOut < 5 && !PioneerDDJSX.valueVuMeter[index + "_enabled"]) {
-                        midiOut = 5;
+                    if (midiOut < 0.1 && !PioneerDDJSX.valueVuMeter[index + "_enabled"]) {
+                        midiOut = 0.1;
                     }
                 }
             }
-            // DDJ-SX3 General MIDI mode uses inverted channel meter polarity:
-            // 0x7F is off and 0x00 is fully lit. Keep internal VU logic in
-            // normal polarity and invert only the final byte sent to hardware.
             midi.sendShortMsg(
                 midiBaseAdress + PioneerDDJSX.channelGroups[index],
                 channel,
-                0x7F - midiOut
+                PioneerDDJSX.channelMeterMidiValue(midiOut, clipped)
             );
         }
     }
