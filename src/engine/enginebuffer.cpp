@@ -928,12 +928,14 @@ void EngineBuffer::processTrackLocked(
         // Force pitchRatio to the linear pitch set by speed
         pitchRatio = speed;
     } else if (keylock_enabled) {
-        // always use IndependentPitchAndTempoScaling
-        // to avoid clicks when crossing the linear pitch
-        // in this case it is most likely that the user
-        // will have an non linear pitch
-        // Note: We have undesired noise when cossfading between scalers
-        useIndependentPitchAndTempoScaling = true;
+        // SoundTouch's overlap processing changes music even at unity.
+        // Keep the vinyl path when neither tempo nor pitch needs processing.
+        // Actual tempo/pitch changes still use the existing scaler crossfade;
+        // RubberBand selection and transport behavior remain unchanged.
+        const bool soundTouchUnity =
+                m_pKeylockEngine->get() == static_cast<double>(KeylockEngine::SoundTouch) &&
+                speed == 1.0 && pitchRatio == 1.0;
+        useIndependentPitchAndTempoScaling = !soundTouchUnity;
     } else {
         // We might have have temporary speed change, so adjust pitch if not locked
         // Note: This will not update key and tempo widgets

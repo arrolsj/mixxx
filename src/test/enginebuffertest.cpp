@@ -296,7 +296,9 @@ TEST_F(EngineBufferTest, ScalerNoTransport) {
     ProcessBuffer();
     EXPECT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
 
-    // switch to keylock scaler
+    // A non-unity tempo needs the keylock scaler. Unity SoundTouch now
+    // deliberately stays on vinyl, independently of this pause contract.
+    ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.08);
     ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 1.0);
     ProcessBuffer();
     EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
@@ -312,6 +314,55 @@ TEST_F(EngineBufferTest, ScalerNoTransport) {
     ProcessBuffer();
     EXPECT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
 }
+
+TEST_F(EngineBufferTest, SoundTouchUnityKeylockKeepsVinylScaler) {
+    ControlObject::set(ConfigKey(kAppGroup, QStringLiteral("keylock_engine")),
+            static_cast<double>(EngineBuffer::KeylockEngine::SoundTouch));
+    ControlObject::set(ConfigKey(m_sGroup1, "keylockMode"), 0.0);
+    ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
+    ProcessBuffer();
+    ASSERT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
+
+    ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 1.0);
+    ProcessBuffer();
+    EXPECT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
+
+    // A real tempo adjustment needs time stretching, then unity restores
+    // the transparent path through the normal scaler transition.
+    ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.08);
+    ProcessBuffer();
+    EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
+    ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.0);
+    ProcessBuffer();
+    EXPECT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
+
+    // Independent musical pitch adjustment must still be processed at
+    // unity tempo; MT cannot silently disable the pitch control.
+    ControlObject::set(ConfigKey(m_sGroup1, "pitch_adjust"), 0.5);
+    ProcessBuffer();
+    EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
+    ControlObject::set(ConfigKey(m_sGroup1, "play"), 0.0);
+    ControlObject::set(ConfigKey(m_sGroup1, "pitch_adjust"), 0.0);
+    ProcessBuffer();
+    EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
+}
+
+#ifdef __RUBBERBAND__
+TEST_F(EngineBufferTest, RubberBandUnityKeylockStillUsesKeylockScaler) {
+    for (const auto engine : {EngineBuffer::KeylockEngine::RubberBandFaster,
+                 EngineBuffer::KeylockEngine::RubberBandFiner}) {
+        ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 0.0);
+        ControlObject::set(ConfigKey(kAppGroup, QStringLiteral("keylock_engine")),
+                static_cast<double>(engine));
+        ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
+        ProcessBuffer();
+        ASSERT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
+        ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 1.0);
+        ProcessBuffer();
+        EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
+    }
+}
+#endif
 
 TEST_F(EngineBufferTest, VinylScalerRampZero) {
     // scratch in play mode
