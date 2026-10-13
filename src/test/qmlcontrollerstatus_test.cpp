@@ -328,6 +328,11 @@ TEST_F(QmlControllerStatusTest, RequestsOnlyUnmanagedSupportedMidiInputs) {
     EXPECT_FALSE(status.hasOpenController());
     ASSERT_TRUE(status.setMidiTopology(topology));
     EXPECT_EQ(requests, 2); // manager can retry deferred discovery, no native I/O here
+    FakeController outputOnly(QStringLiteral("DDJ-FLX4 MIDI 1"), false, true,
+            QStringLiteral(".midi.xml"));
+    status.setControllers({&outputOnly});
+    ASSERT_TRUE(status.setMidiTopology(topology));
+    EXPECT_EQ(requested, QStringList({QStringLiteral("DDJ-FLX4 MIDI 1")}));
     FakeController managed(QStringLiteral("DDJ-FLX4 MIDI 1"), true, true,
             QStringLiteral(".midi.xml"));
     status.setControllers({&managed});
@@ -336,7 +341,7 @@ TEST_F(QmlControllerStatusTest, RequestsOnlyUnmanagedSupportedMidiInputs) {
     ASSERT_TRUE(status.setMidiTopology("Client info\nClient 0 : \"System\" [Kernel]\n"));
     EXPECT_TRUE(requested.isEmpty());
     EXPECT_FALSE(status.setMidiTopology("broken"));
-    EXPECT_EQ(requests, 4);
+    EXPECT_EQ(requests, 5);
 }
 
 TEST_F(QmlControllerStatusTest, InventoryPreservesOpenStreamsAndRemovesStaleMidiRows) {

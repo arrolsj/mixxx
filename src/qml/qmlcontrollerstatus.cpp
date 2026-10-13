@@ -261,7 +261,8 @@ bool QmlControllerStatus::applyMidiTopology(const QByteArray& topology) {
         }
         bool managed = false;
         for (const auto& controller : std::as_const(m_controllers)) {
-            managed |= controller && controller->getName() == port.name;
+            managed |= controller && controller->isInputDevice() &&
+                    controller->getName() == port.name;
         }
         if (!managed && !newInputs.contains(port.name)) {
             newInputs.append(port.name);
