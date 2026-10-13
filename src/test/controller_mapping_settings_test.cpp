@@ -2,14 +2,108 @@
 #include <gtest/gtest.h>
 
 #include <QDomDocument>
+#include <QFile>
 
 #include "controllers/legacycontrollermapping.h"
 #include "controllers/legacycontrollermappingfilehandler.h"
 #include "controllers/legacycontrollersettings.h"
+#include "controllers/defs_controllers.h"
+#include "controllers/pioneerautomapping.h"
 #include "test/mixxxtest.h"
 
 class LegacyControllerMappingSettingsTest : public MixxxTest {
 };
+
+TEST_F(LegacyControllerMappingSettingsTest, PioneerAutomaticMappingRequiresExactInputName) {
+    using mixxx::controllers::pioneerMappingForInput;
+    for (const QString& name : {QStringLiteral("DDJ-FLX4"),
+                 QStringLiteral("PIONEER DJ DDJ-FLX4 MIDI 1"),
+                 QStringLiteral("ddj-flx4 MIDI")}) {
+        EXPECT_EQ(pioneerMappingForInput(name, true), "Pioneer-DDJ-FLX4.midi.xml");
+        EXPECT_TRUE(pioneerMappingForInput(name, false).isEmpty());
+    }
+    EXPECT_EQ(pioneerMappingForInput("DDJ-400 MIDI 1", true), "Pioneer-DDJ-400.midi.xml");
+    for (const QString& name : {QString(), QStringLiteral("DDJ-FLX40"),
+                 QStringLiteral("DDJ-400 Output"), QStringLiteral("MIDIIN2 (DDJ-FLX4)"),
+                 QStringLiteral("Unknown DDJ-400"), QStringLiteral("DDJ-SX3")}) {
+        EXPECT_TRUE(pioneerMappingForInput(name, true).isEmpty());
+    }
+}
+
+TEST_F(LegacyControllerMappingSettingsTest, PioneerDiscoveryRetriesSettlingPortsWithoutInterruptingOpenStreams) {
+    mixxx::controllers::PioneerDiscoveryState state;
+    const QStringList present{QStringLiteral("DDJ-400 MIDI 1")};
+    state.observe(present);
+    for (int poll = 0; poll < 10; ++poll) {
+        EXPECT_TRUE(state.takeCandidates(true).isEmpty()); // active MIDI or audio recovery
+    }
+    EXPECT_EQ(state.takeCandidates(false), present); // initial native scan misses port
+    state.observe(present);
+    EXPECT_EQ(state.takeCandidates(false), present); // retry after firmware settles
+    state.observe(present);
+    EXPECT_EQ(state.takeCandidates(false), present);
+    for (int poll = 0; poll < 10; ++poll) {
+        state.observe(present);
+        EXPECT_TRUE(state.takeCandidates(false).isEmpty()); // bounded, no scan storm
+    }
+    state.observe({}); // unplug or actual native enumeration took ownership
+    state.observe(present);
+    EXPECT_EQ(state.takeCandidates(false), present);
+    state.observe({QStringLiteral("Unknown DJ"), QStringLiteral("DDJ-400 Output")});
+    EXPECT_TRUE(state.takeCandidates(false).isEmpty());
+}
+
+TEST_F(LegacyControllerMappingSettingsTest, PioneerAutomaticMappingPreservesExistingKeysAndSafeMode) {
+    using mixxx::controllers::unconfiguredPioneerMapping;
+    const QString name("DDJ-400 MIDI 1");
+    const QString key("DDJ-400_MIDI_1");
+    EXPECT_FALSE(unconfiguredPioneerMapping(config(), name, true, false).isEmpty());
+    EXPECT_TRUE(unconfiguredPioneerMapping(config(), name, true, true).isEmpty());
+    EXPECT_TRUE(unconfiguredPioneerMapping(config(), name, false, false).isEmpty());
+    config()->setValue(ConfigKey("[Controller]", key), 0);
+    EXPECT_TRUE(unconfiguredPioneerMapping(config(), name, true, false).isEmpty());
+    config()->remove(ConfigKey("[Controller]", key));
+    for (const QString& preset : {QString(), QStringLiteral("custom.midi.xml")}) {
+        config()->setValue(ConfigKey("[ControllerPreset]", key), preset);
+        EXPECT_TRUE(unconfiguredPioneerMapping(config(), name, true, false).isEmpty());
+    }
+}
+
+TEST_F(LegacyControllerMappingSettingsTest, PioneerAutomaticMappingLoadsPackagedFilesBeforeWriting) {
+    using mixxx::controllers::configureDetectedPioneer;
+    const QDir mappings(resourceMappingsPath(config()));
+    for (const QString& model : {QStringLiteral("400"), QStringLiteral("FLX4")}) {
+        const QString name = "DDJ-" + model;
+        ASSERT_TRUE(configureDetectedPioneer(config(), name, true, ".midi.xml", false, mappings));
+        EXPECT_EQ(config()->getValueString(ConfigKey("[ControllerPreset]", name)),
+                "Pioneer-DDJ-" + model + ".midi.xml");
+        EXPECT_EQ(config()->getValue<int>(ConfigKey("[Controller]", name)), 1);
+        EXPECT_FALSE(configureDetectedPioneer(config(), name, true, ".midi.xml", false, mappings));
+    }
+}
+
+TEST_F(LegacyControllerMappingSettingsTest, PioneerAutomaticMappingDoesNotPersistMissingOrBrokenResources) {
+    using mixxx::controllers::configureDetectedPioneer;
+    const QString name("DDJ-400");
+    const QDir mappings = getTestDataDir();
+    EXPECT_FALSE(configureDetectedPioneer(config(), name, true, ".midi.xml", false, mappings));
+    QFile broken(mappings.filePath("Pioneer-DDJ-400.midi.xml"));
+    ASSERT_TRUE(broken.open(QIODevice::WriteOnly));
+    broken.write("<broken");
+    broken.close();
+    EXPECT_FALSE(configureDetectedPioneer(config(), name, true, ".midi.xml", false, mappings));
+    EXPECT_FALSE(config()->exists(ConfigKey("[Controller]", name)));
+    EXPECT_FALSE(config()->exists(ConfigKey("[ControllerPreset]", name)));
+    ASSERT_TRUE(broken.remove());
+    ASSERT_TRUE(QFile::copy(QDir(resourceMappingsPath(config())).filePath(
+                                   "Pioneer-DDJ-400.midi.xml"),
+            broken.fileName()));
+    EXPECT_FALSE(configureDetectedPioneer(config(), name, true, ".midi.xml", false, mappings));
+    EXPECT_FALSE(config()->exists(ConfigKey("[Controller]", name)));
+    EXPECT_FALSE(config()->exists(ConfigKey("[ControllerPreset]", name)));
+    EXPECT_FALSE(configureDetectedPioneer(config(), "DDJ-FLX4", true, ".hid.xml", false,
+            QDir(resourceMappingsPath(config()))));
+}
 
 const char* const kValidBoolean =
         "<option variable=\"myToggle1\" type=\"boolean\" default=\"%1\" "

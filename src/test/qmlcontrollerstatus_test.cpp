@@ -312,6 +312,33 @@ TEST_F(QmlControllerStatusTest, DiscoversUnknownMidiWithoutOpeningOrMappingIt) {
     EXPECT_EQ(resets, 1);
 }
 
+TEST_F(QmlControllerStatusTest, RequestsOnlyUnmanagedSupportedMidiInputs) {
+    TestableQmlControllerStatus status;
+    QStringList requested;
+    int requests = 0;
+    QObject::connect(&status,
+            &mixxx::qml::QmlControllerStatus::pioneerInputsDiscovered,
+            &status, [&](const QStringList& names) { requested = names; ++requests; });
+    const QByteArray topology("Client info\nClient 24 : \"Pioneer\" [Kernel]\n"
+                             "  Port 0 : \"DDJ-FLX4 MIDI 1\" (RWeX)\n"
+                             "  Port 1 : \"DDJ-400\" (-WeX)\n"
+                             "  Port 2 : \"Unknown DDJ-400\" (RWeX)\n");
+    ASSERT_TRUE(status.setMidiTopology(topology));
+    EXPECT_EQ(requested, QStringList({QStringLiteral("DDJ-FLX4 MIDI 1")}));
+    EXPECT_FALSE(status.hasOpenController());
+    ASSERT_TRUE(status.setMidiTopology(topology));
+    EXPECT_EQ(requests, 2); // manager can retry deferred discovery, no native I/O here
+    FakeController managed(QStringLiteral("DDJ-FLX4 MIDI 1"), true, true,
+            QStringLiteral(".midi.xml"));
+    status.setControllers({&managed});
+    ASSERT_TRUE(status.setMidiTopology(topology));
+    EXPECT_TRUE(requested.isEmpty());
+    ASSERT_TRUE(status.setMidiTopology("Client info\nClient 0 : \"System\" [Kernel]\n"));
+    EXPECT_TRUE(requested.isEmpty());
+    EXPECT_FALSE(status.setMidiTopology("broken"));
+    EXPECT_EQ(requests, 4);
+}
+
 TEST_F(QmlControllerStatusTest, InventoryPreservesOpenStreamsAndRemovesStaleMidiRows) {
     FakeController midi(QStringLiteral("SX3 MIDI 1"), true, true,
             QStringLiteral(".midi.xml"));

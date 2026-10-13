@@ -62,6 +62,7 @@ class QmlControllerStatus : public QAbstractListModel {
     void hasOpenControllerChanged();
     void devicesChanged();
     void controllerNamesChanged();
+    void pioneerInputsDiscovered(const QStringList& names);
 
   protected:
     // Allows the device-list behavior to be exercised without constructing a

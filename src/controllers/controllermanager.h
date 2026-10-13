@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "controllers/controllerenumerator.h"
+#include "controllers/pioneerautomapping.h"
 #include "preferences/usersettings.h"
 #include "util/duration.h"
 
@@ -59,6 +60,7 @@ class ControllerManager : public QObject {
     void controllerDeviceReconnected(const QString& deviceName);
 
   public slots:
+    void slotDiscoverPioneerControllers(const QStringList& inputNames);
     void slotResumeControllerReconnect(const QString& deviceName, bool audioRecovered);
     void slotApplyMapping(Controller* pController,
             std::shared_ptr<LegacyControllerMapping> pMapping,
@@ -98,6 +100,7 @@ class ControllerManager : public QObject {
     QList<Controller*> m_controllers;
     QSet<QString> m_pendingReconnectDeviceNames;
     QSet<QString> m_audioGatedReconnectDeviceNames;
+    mixxx::controllers::PioneerDiscoveryState m_pioneerDiscovery;
     QThread* m_pThread;
     QSharedPointer<MappingInfoEnumerator> m_pMainThreadUserMappingEnumerator;
     QSharedPointer<MappingInfoEnumerator> m_pMainThreadSystemMappingEnumerator;

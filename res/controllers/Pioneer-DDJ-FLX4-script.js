@@ -112,7 +112,7 @@ PioneerDDJFLX4.lights = {
     },
     deck2: {
         vuMeter: {
-            status: 0xB0,
+            status: 0xB1,
             data1: 0x02,
         },
         playPause: {
@@ -350,7 +350,7 @@ PioneerDDJFLX4.waveformZoom = function(midichan, control, value, status, group) 
 //
 
 PioneerDDJFLX4.vuMeterUpdate = function(value, group) {
-    const newVal = value * 127;
+    const newVal = Number.isFinite(value) ? Math.round(Math.max(0, Math.min(127, value * 127))) : 0;
 
     switch (group) {
     case "[Channel1]":

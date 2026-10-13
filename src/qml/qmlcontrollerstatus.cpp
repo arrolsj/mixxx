@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "controllers/controllermanager.h"
+#include "controllers/pioneerautomapping.h"
 #include "moc_qmlcontrollerstatus.cpp"
 #include "util/assert.h"
 
@@ -38,6 +39,9 @@ QmlControllerStatus::QmlControllerStatus(
             &ControllerManager::devicesChanged,
             this,
             &QmlControllerStatus::rebuildDevices);
+    connect(this, &QmlControllerStatus::pioneerInputsDiscovered,
+            m_pManager, &ControllerManager::slotDiscoverPioneerControllers,
+            Qt::QueuedConnection);
     connect(m_pManager,
             &ControllerManager::mappingApplied,
             this,
@@ -250,6 +254,22 @@ bool QmlControllerStatus::applyMidiTopology(const QByteArray& topology) {
         m_midiPorts = std::move(ports);
         rebuildDeviceRows();
     }
+    QStringList newInputs;
+    for (const auto& port : std::as_const(m_midiPorts)) {
+        if (mixxx::controllers::pioneerMappingForInput(port.name, port.input).isEmpty()) {
+            continue;
+        }
+        bool managed = false;
+        for (const auto& controller : std::as_const(m_controllers)) {
+            managed |= controller && controller->getName() == port.name;
+        }
+        if (!managed && !newInputs.contains(port.name)) {
+            newInputs.append(port.name);
+        }
+    }
+    // Repeat the read-only snapshot so the manager can finish deferred discovery
+    // after an existing controller closes, without repeatedly refreshing MIDI.
+    emit pioneerInputsDiscovered(newInputs);
     return true;
 }
 

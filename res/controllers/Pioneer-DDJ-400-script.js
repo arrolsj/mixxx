@@ -77,7 +77,7 @@ PioneerDDJ400.lights = {
     },
     deck2: {
         vuMeter: {
-            status: 0xB0,
+            status: 0xB1,
             data1: 0x02,
         },
         playPause: {
@@ -132,7 +132,87 @@ PioneerDDJ400.beatjumpSizeForPad = {
     0x27: 8   // PAD 8
 };
 
+PioneerDDJ400.padModes = {
+    hotCue: 0,
+    sampler: 3,
+    beatLoop: 5,
+    beatJump: 8,
+};
+PioneerDDJ400.activePadMode = [
+    PioneerDDJ400.padModes.hotCue,
+    PioneerDDJ400.padModes.hotCue,
+];
+
+PioneerDDJ400.deckForPadModeStatus = function(status) {
+    if (status === 0x90) {
+        return 1;
+    }
+    if (status === 0x91) {
+        return 2;
+    }
+    return 0;
+};
+
+PioneerDDJ400.beatjumpPage = function() {
+    const baseSize = Math.abs(PioneerDDJ400.beatjumpSizeForPad[0x21]);
+    if (baseSize < 1) {
+        return 0;
+    }
+    if (baseSize > 1) {
+        return 2;
+    }
+    return 1;
+};
+
+PioneerDDJ400.publishPadMode = function(deck, mode, parameter) {
+    if (deck !== 1 && deck !== 2) {
+        return;
+    }
+    PioneerDDJ400.activePadMode[deck - 1] = mode;
+    engine.setValue("[LastCueGeneral]", "pad_mode_deck" + deck, mode);
+    engine.setValue("[LastCueGeneral]", "pad_parameter_deck" + deck, parameter || 0);
+};
+
+PioneerDDJ400.publishVisibleBeatjumpPages = function() {
+    for (let deck = 1; deck <= 2; ++deck) {
+        if (PioneerDDJ400.activePadMode[deck - 1] === PioneerDDJ400.padModes.beatJump) {
+            PioneerDDJ400.publishPadMode(
+                deck,
+                PioneerDDJ400.padModes.beatJump,
+                PioneerDDJ400.beatjumpPage());
+        }
+    }
+};
+
 PioneerDDJ400.quickJumpSize = 32;
+
+// DDJ-400 MIDI list: primary mode notes 1B/6D/20/22 on 90/91.
+// Mirror the existing FLX4 read-only fallback for unsupported secondary modes.
+PioneerDDJ400.padModeKeyPressed = function(_channel, control, value, status) {
+    const deck = PioneerDDJ400.deckForPadModeStatus(status);
+    if (value === 0 || deck === 0) {
+        return;
+    }
+    let mode = PioneerDDJ400.padModes.hotCue;
+    let parameter = 0;
+    switch (control) {
+    case 0x1B: case 0x69: case 0x1E: case 0x6B: case 0x6F:
+        break;
+    case 0x6D:
+        mode = PioneerDDJ400.padModes.beatLoop;
+        break;
+    case 0x20:
+        mode = PioneerDDJ400.padModes.beatJump;
+        parameter = PioneerDDJ400.beatjumpPage();
+        break;
+    case 0x22:
+        mode = PioneerDDJ400.padModes.sampler;
+        break;
+    default:
+        return;
+    }
+    PioneerDDJ400.publishPadMode(deck, mode, parameter);
+};
 
 // Used for tempo slider
 PioneerDDJ400.highResMSB = {
@@ -157,6 +237,9 @@ PioneerDDJ400.toggleLight = function(midiIn, active) {
 //
 
 PioneerDDJ400.init = function() {
+    PioneerDDJ400.publishPadMode(1, PioneerDDJ400.padModes.hotCue, 0);
+    PioneerDDJ400.publishPadMode(2, PioneerDDJ400.padModes.hotCue, 0);
+
     engine.setValue("[EffectRack1_EffectUnit1]", "show_focus", 1);
 
     engine.makeUnbufferedConnection("[Channel1]", "vu_meter", PioneerDDJ400.vuMeterUpdate);
@@ -207,7 +290,7 @@ PioneerDDJ400.init = function() {
 //
 
 PioneerDDJ400.vuMeterUpdate = function(value, group) {
-    const newVal = value * 150;
+    const newVal = Number.isFinite(value) ? Math.round(Math.max(0, Math.min(127, value * 150))) : 0;
 
     switch (group) {
     case "[Channel1]":
@@ -564,6 +647,7 @@ PioneerDDJ400.increaseBeatjumpSizes = function(_channel, control, value, _status
         PioneerDDJ400.beatjumpSizeForPad[pad] = PioneerDDJ400.beatjumpSizeForPad[pad] * 16;
     });
     engine.setValue(group, "beatjump_size", PioneerDDJ400.beatjumpSizeForPad[0x21]);
+    PioneerDDJ400.publishVisibleBeatjumpPages();
 };
 
 PioneerDDJ400.decreaseBeatjumpSizes = function(_channel, control, value, _status, group) {
@@ -574,6 +658,7 @@ PioneerDDJ400.decreaseBeatjumpSizes = function(_channel, control, value, _status
         PioneerDDJ400.beatjumpSizeForPad[pad] = PioneerDDJ400.beatjumpSizeForPad[pad] / 16;
     });
     engine.setValue(group, "beatjump_size", PioneerDDJ400.beatjumpSizeForPad[0x21]);
+    PioneerDDJ400.publishVisibleBeatjumpPages();
 };
 
 //

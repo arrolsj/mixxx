@@ -8,6 +8,7 @@
 #include "controllers/controllerlearningeventfilter.h"
 #include "controllers/controllermappinginfoenumerator.h"
 #include "controllers/defs_controllers.h"
+#include "controllers/pioneerautomapping.h"
 #include "moc_controllermanager.cpp"
 #include "util/cmdlineargs.h"
 #include "util/compatibility/qmutex.h"
@@ -359,6 +360,13 @@ void ControllerManager::setUpDevices(bool refreshPortMidiOnly) {
         // The filename for this device name.
         QString deviceName = sanitizeDeviceName(name);
 
+        if (mixxx::controllers::configureDetectedPioneer(m_pConfig,
+                    name, pController->isInputDevice(), pController->mappingExtension(),
+                    CmdlineArgs::Instance().getSafeMode(),
+                    QDir(resourceMappingsPath(m_pConfig)))) {
+            qInfo() << "Selected packaged mapping for detected controller:" << name;
+        }
+
         // Check if device is enabled
         if (!m_pConfig->getValue(ConfigKey("[Controller]", deviceName), 0)) {
             continue;
@@ -565,6 +573,29 @@ void ControllerManager::slotRetryDisconnectedDevices() {
     }
     qDebug() << "Retrying disconnected controller discovery";
     setUpDevices(true);
+}
+
+void ControllerManager::slotDiscoverPioneerControllers(const QStringList& inputNames) {
+    DEBUG_ASSERT_QOBJECT_THREAD_AFFINITY(this);
+    m_pioneerDiscovery.observe(inputNames);
+    bool blocked = !m_audioGatedReconnectDeviceNames.isEmpty();
+    // PortMidi refresh closes every MIDI stream. Defer a new controller while
+    // another controller is open, rather than interrupting an ongoing set.
+    for (Controller* controller : getControllers()) {
+        blocked |= controller->isOpen();
+    }
+    bool discover = false;
+    for (const QString& name : m_pioneerDiscovery.takeCandidates(blocked)) {
+        const QString filename = mixxx::controllers::unconfiguredPioneerMapping(
+                m_pConfig, name, true, CmdlineArgs::Instance().getSafeMode());
+        discover |= !filename.isEmpty() &&
+                QFileInfo(QDir(resourceMappingsPath(m_pConfig)).filePath(filename)).isFile();
+    }
+    if (discover) {
+        // Inventory is only a trigger. Binding still requires a real input
+        // Controller from the native enumerator in setUpDevices().
+        setUpDevices(true);
+    }
 }
 
 void ControllerManager::slotResumeControllerReconnect(
