@@ -313,9 +313,10 @@ TEST_F(EngineBufferTest, ScalerNoTransport) {
     ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
     ProcessBuffer();
     EXPECT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
-}
 
-TEST_F(EngineBufferTest, SoundTouchUnityKeylockKeepsVinylScaler) {
+    SCOPED_TRACE("SoundTouch unity and pitch/pause behavior");
+    ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.0);
+
     ControlObject::set(ConfigKey(kAppGroup, QStringLiteral("keylock_engine")),
             static_cast<double>(EngineBuffer::KeylockEngine::SoundTouch));
     ControlObject::set(ConfigKey(m_sGroup1, "keylockMode"), 0.0);
@@ -345,10 +346,10 @@ TEST_F(EngineBufferTest, SoundTouchUnityKeylockKeepsVinylScaler) {
     ControlObject::set(ConfigKey(m_sGroup1, "pitch_adjust"), 0.0);
     ProcessBuffer();
     EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
-}
 
 #ifdef __RUBBERBAND__
-TEST_F(EngineBufferTest, RubberBandUnityKeylockStillUsesKeylockScaler) {
+    SCOPED_TRACE("RubberBand unity behavior unchanged");
+
     for (const auto engine : {EngineBuffer::KeylockEngine::RubberBandFaster,
                  EngineBuffer::KeylockEngine::RubberBandFiner}) {
         ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 0.0);
@@ -361,8 +362,10 @@ TEST_F(EngineBufferTest, RubberBandUnityKeylockStillUsesKeylockScaler) {
         ProcessBuffer();
         EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
     }
-}
+
 #endif
+}
+
 
 TEST_F(EngineBufferTest, VinylScalerRampZero) {
     // scratch in play mode
