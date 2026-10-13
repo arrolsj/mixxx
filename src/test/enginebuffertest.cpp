@@ -296,7 +296,7 @@ TEST_F(EngineBufferTest, ScalerNoTransport) {
     ProcessBuffer();
     EXPECT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
 
-    // A non-unity tempo needs the keylock scaler. Unity SoundTouch now
+    // A non-unity tempo needs the keylock scaler. Unity SoundTouch/R2 now
     // deliberately stays on vinyl, independently of this pause contract.
     ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.08);
     ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 1.0);
@@ -348,7 +348,7 @@ TEST_F(EngineBufferTest, ScalerNoTransport) {
     EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
 
 #ifdef __RUBBERBAND__
-    SCOPED_TRACE("RubberBand unity behavior unchanged");
+    SCOPED_TRACE("R2 unity bypass and R3 behavior unchanged");
 
     for (const auto engine : {EngineBuffer::KeylockEngine::RubberBandFaster,
                  EngineBuffer::KeylockEngine::RubberBandFiner}) {
@@ -360,7 +360,16 @@ TEST_F(EngineBufferTest, ScalerNoTransport) {
         ASSERT_EQ(m_pMockScaleVinyl1, m_pChannel1->getEngineBuffer()->m_pScale);
         ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 1.0);
         ProcessBuffer();
+        const auto unityScaler = engine == EngineBuffer::KeylockEngine::RubberBandFiner
+                ? m_pMockScaleKeylock1
+                : m_pMockScaleVinyl1;
+        EXPECT_EQ(unityScaler, m_pChannel1->getEngineBuffer()->m_pScale);
+        ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.08);
+        ProcessBuffer();
         EXPECT_EQ(m_pMockScaleKeylock1, m_pChannel1->getEngineBuffer()->m_pScale);
+        ControlObject::set(ConfigKey(m_sGroup1, "rate_ratio"), 1.0);
+        ProcessBuffer();
+        EXPECT_EQ(unityScaler, m_pChannel1->getEngineBuffer()->m_pScale);
     }
 
 #endif
