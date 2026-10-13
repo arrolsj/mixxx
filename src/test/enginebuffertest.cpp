@@ -10,6 +10,9 @@
 
 #include "control/controlobject.h"
 #include "engine/bufferscalers/enginebufferscalest.h"
+#ifdef __RUBBERBAND__
+#include "engine/bufferscalers/enginebufferscalerubberband.h"
+#endif
 #include "engine/controls/ratecontrol.h"
 #include "engine/readaheadmanager.h"
 #include "mixer/basetrackplayer.h"
@@ -52,6 +55,11 @@ class SoundTouchPaddingReader : public ReadAheadManager {
         return m_samples;
     }
 
+    void restart() {
+        m_reads = 0;
+        m_samples = 0;
+    }
+
   private:
     const bool m_returnZero;
     int m_reads{0};
@@ -87,6 +95,66 @@ TEST_F(EngineBufferScaleSTTest, RepeatedZeroReadPadsExactlyOneStereoBuffer) {
         EXPECT_EQ(expected, actual);
     }
 }
+#ifdef __RUBBERBAND__
+class EngineBufferScaleRubberBandTest : public MixxxTest {
+};
+
+TEST_F(EngineBufferScaleRubberBandTest, RepeatedFasterSelectionPreservesBufferedAudio) {
+    for (const double tempo : {0.92, 1.0, 1.08, -0.92, -1.08}) {
+        SCOPED_TRACE(tempo);
+        SoundTouchPaddingReader referenceReader(false);
+        SoundTouchPaddingReader actualReader(false);
+        EngineBufferScaleRubberBand reference(&referenceReader);
+        EngineBufferScaleRubberBand actual(&actualReader);
+        for (auto* scaler : {&reference, &actual}) {
+            scaler->setSampleRate(mixxx::audio::SampleRate(44100));
+            scaler->useEngineFiner(false);
+            double ratio = tempo;
+            double pitch = 1.0;
+            scaler->setScaleParameters(1.0, &ratio, &pitch);
+            scaler->clear();
+        }
+        std::vector<CSAMPLE> expected(1024);
+        std::vector<CSAMPLE> observed(1024);
+        for (int block = 0; block < 12; ++block) {
+            if (block == 4 || block == 8) {
+                actual.useEngineFiner(false);
+            }
+            EXPECT_DOUBLE_EQ(reference.scaleBuffer(expected.data(), expected.size()),
+                    actual.scaleBuffer(observed.data(), observed.size()));
+            EXPECT_EQ(expected, observed);
+            EXPECT_EQ(referenceReader.samplesRead(), actualReader.samplesRead());
+        }
+    }
+}
+
+TEST_F(EngineBufferScaleRubberBandTest, ClearDiscardsPreviousAudioAndRetainsTransportRate) {
+    SoundTouchPaddingReader firstReader(false);
+    SoundTouchPaddingReader secondReader(false);
+    EngineBufferScaleRubberBand first(&firstReader);
+    EngineBufferScaleRubberBand second(&secondReader);
+    for (auto* scaler : {&first, &second}) {
+        scaler->setSampleRate(mixxx::audio::SampleRate(44100));
+        double ratio = 1.08;
+        double pitch = 1.0;
+        scaler->setScaleParameters(1.0, &ratio, &pitch);
+        scaler->clear();
+    }
+    std::vector<CSAMPLE> expected(1024);
+    std::vector<CSAMPLE> observed(1024);
+    for (int block = 0; block < 8; ++block) {
+        first.scaleBuffer(observed.data(), observed.size());
+    }
+    firstReader.restart();
+    first.clear();
+    for (int block = 0; block < 8; ++block) {
+        EXPECT_DOUBLE_EQ(first.scaleBuffer(expected.data(), expected.size()),
+                second.scaleBuffer(observed.data(), observed.size()));
+        EXPECT_EQ(expected, observed);
+        EXPECT_EQ(firstReader.samplesRead(), secondReader.samplesRead());
+    }
+}
+#endif
 }
 
 class EngineBufferTest : public MockedEngineBackendTest {};

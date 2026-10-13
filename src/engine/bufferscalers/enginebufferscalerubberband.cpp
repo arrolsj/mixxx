@@ -101,6 +101,9 @@ void EngineBufferScaleRubberBand::onSampleRateChanged() {
     }
     RubberBandStretcher::Options rubberbandOptions =
             RubberBandStretcher::OptionProcessRealTime;
+    if (!m_useEngineFiner) {
+        rubberbandOptions |= RubberBandStretcher::OptionTransientsSmooth;
+    }
 #if RUBBERBANDV3
     if (m_useEngineFiner) {
         rubberbandOptions |=
@@ -120,6 +123,23 @@ void EngineBufferScaleRubberBand::onSampleRateChanged() {
     // avoid memory reallocations during playback.
     m_pRubberBand->setTimeRatio(2.0);
     m_pRubberBand->setTimeRatio(1.0);
+
+    if (!m_useEngineFiner) {
+        // Exercise lazy DSP initialization when this instance is created,
+        // before a playing deck switches to it. Reset discards all warmup
+        // audio and restores the normal start padding/delay compensation.
+        for (int block = 0; block < 2; ++block) {
+            const size_t frames = std::min<size_t>(
+                    m_pRubberBand->getSamplesRequired(), m_buffers[0].size());
+            if (frames == 0) {
+                break;
+            }
+            std::fill_n(m_buffers[0].span().begin(), frames, 0.0f);
+            std::fill_n(m_buffers[1].span().begin(), frames, 0.0f);
+            m_pRubberBand->process(m_bufferPtrs.data(), frames, false);
+        }
+        reset();
+    }
 }
 
 void EngineBufferScaleRubberBand::clear() {
@@ -261,7 +281,7 @@ bool EngineBufferScaleRubberBand::isEngineFinerAvailable() {
 }
 
 void EngineBufferScaleRubberBand::useEngineFiner(bool enable) {
-    if (isEngineFinerAvailable()) {
+    if (isEngineFinerAvailable() && m_useEngineFiner != enable) {
         m_useEngineFiner = enable;
         onSampleRateChanged();
     }
