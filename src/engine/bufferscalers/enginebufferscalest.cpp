@@ -26,6 +26,14 @@ constexpr SINT kSeekOffsetFramesV20101 = 429;
 
 constexpr SINT kBackBufferSize = 1024;
 
+// SoundTouch's automatic sequence length is ~66 ms near unity tempo. Drum
+// attacks that fall into the splice overlap of such long sequences lose
+// several dB of attack. Shorter fixed sequences keep the attacks while the
+// seek cost stays similar (more, but shorter, seeks).
+constexpr int kSequenceMs = 30;
+constexpr int kSeekWindowMs = 10;
+constexpr int kOverlapMs = 8;
+
 }  // namespace
 
 EngineBufferScaleST::EngineBufferScaleST(ReadAheadManager* pReadAheadManager)
@@ -37,6 +45,9 @@ EngineBufferScaleST::EngineBufferScaleST(ReadAheadManager* pReadAheadManager)
     m_pSoundTouch->setRate(m_dBaseRate);
     m_pSoundTouch->setPitch(1.0);
     m_pSoundTouch->setSetting(SETTING_USE_QUICKSEEK, 1);
+    m_pSoundTouch->setSetting(SETTING_SEQUENCE_MS, kSequenceMs);
+    m_pSoundTouch->setSetting(SETTING_SEEKWINDOW_MS, kSeekWindowMs);
+    m_pSoundTouch->setSetting(SETTING_OVERLAP_MS, kOverlapMs);
     // Initialize the internal buffers to prevent re-allocations
     // in the real-time thread.
     onSampleRateChanged();

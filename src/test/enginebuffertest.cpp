@@ -6,6 +6,7 @@
 #include <QString>
 #include <QTest>
 #include <QtDebug>
+#include <soundtouch/SoundTouch.h>
 #include <vector>
 
 #include "control/controlobject.h"
@@ -96,6 +97,54 @@ TEST_F(EngineBufferScaleSTTest, RepeatedZeroReadPadsExactlyOneStereoBuffer) {
         EXPECT_EQ(silenceReader.samplesRead(), zeroReader.samplesRead());
         EXPECT_EQ(expected, actual);
     }
+}
+
+// Renders the reader signal through a bare SoundTouch instance, fed in the
+// same 512-frame chunks as EngineBufferScaleST.
+std::vector<CSAMPLE> renderBareSoundTouch(double tempo, int sequenceMs, int seekWindowMs) {
+    soundtouch::SoundTouch st;
+    st.setChannels(2);
+    st.setRate(1.0);
+    st.setPitch(1.0);
+    st.setSetting(SETTING_USE_QUICKSEEK, 1);
+    st.setSetting(SETTING_SEQUENCE_MS, sequenceMs);
+    st.setSetting(SETTING_SEEKWINDOW_MS, seekWindowMs);
+    st.setSetting(SETTING_OVERLAP_MS, 8);
+    st.setSampleRate(44100);
+    st.setTempo(0.1);
+    st.setTempo(1.0);
+    st.clear();
+    st.setTempo(tempo);
+
+    SoundTouchPaddingReader reader(false);
+    std::vector<CSAMPLE> input(1024);
+    std::vector<CSAMPLE> output(32768);
+    SINT received = 0;
+    while (received < 16384) {
+        received += st.receiveSamples(output.data() + 2 * received, 16384 - received);
+        if (received < 16384) {
+            reader.getNextSamples(1.0, input.data(), 1024);
+            st.putSamples(input.data(), 512);
+        }
+    }
+    return output;
+}
+
+TEST_F(EngineBufferScaleSTTest, UsesShortFixedSequencesThatKeepDrumAttacks) {
+    constexpr double kTempo = 1.04;
+    SoundTouchPaddingReader reader(false);
+    EngineBufferScaleST scaler(&reader);
+    scaler.setSampleRate(mixxx::audio::SampleRate(44100));
+    double tempoRatio = kTempo;
+    double pitchRatio = 1.0;
+    scaler.setScaleParameters(1.0, &tempoRatio, &pitchRatio);
+    scaler.clear();
+    std::vector<CSAMPLE> actual(32768);
+    scaler.scaleBuffer(actual.data(), 32768);
+
+    EXPECT_EQ(renderBareSoundTouch(kTempo, 30, 10), actual);
+    // 0 selects SoundTouch's automatic (long) sequence and seek window.
+    EXPECT_NE(renderBareSoundTouch(kTempo, 0, 0), actual);
 }
 #ifdef __RUBBERBAND__
 class EngineBufferScaleRubberBandTest : public MixxxTest {
