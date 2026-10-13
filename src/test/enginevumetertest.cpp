@@ -47,9 +47,14 @@ TEST_F(EngineVuMeterTest, SilenceAndReset) {
 }
 
 TEST_F(EngineVuMeterTest, UnityReferenceAndUnclippedHeadroom) {
-    for (const CSAMPLE amplitude : {0.001f, 0.1f, 0.25f, 0.5f, 1.0f, 2.0f}) {
+    for (const CSAMPLE amplitude : {0.001f, 0.1f, 0.25f, 0.39810717f,
+                 0.44668359f, 0.5f, 0.56234133f, 1.0f, 2.0f}) {
         publish(amplitude, -amplitude);
-        EXPECT_NEAR(20.0 * std::log10(amplitude), peakDb(), 1e-5);
+        // Native Serato uses double log10 before truncating integer dB.
+        // A float log can cross an integer boundary (for example 0.1f).
+        const double expected = 20.0 * std::log10(static_cast<double>(amplitude));
+        EXPECT_NEAR(expected, peakDb(), 1e-10);
+        EXPECT_EQ(std::trunc(expected), std::trunc(peakDb()));
     }
 }
 

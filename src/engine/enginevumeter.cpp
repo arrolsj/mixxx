@@ -62,7 +62,8 @@ void EngineVuMeter::process(CSAMPLE* pIn, const int iBufferSize) {
     // Are we ready to update the VU meter?:
     if (m_samplesCalculated > (sampleRate / kVuUpdateRate)) {
         const double peakDb = m_windowPeak > 0
-                ? std::max(kPeakMeterFloorDb, 20.0 * std::log10(m_windowPeak))
+                ? std::max(kPeakMeterFloorDb,
+                          20.0 * std::log10(static_cast<double>(m_windowPeak)))
                 : kPeakMeterFloorDb;
         m_peakMeterDb.set(peakDb);
         m_windowPeak = 0;
