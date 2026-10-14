@@ -267,9 +267,12 @@ PioneerDDJSX.wrapInactiveDeckInputHandlers = function() {
 
 
 PioneerDDJSX.init = function(id) {
+    // A stiffer filter than Mixxx's usual 1/8 and 1/256 follows the hand in
+    // 32 ms instead of 63 ms (to 90% of a speed change). Slow drags have
+    // more speed ripple: 5.6% instead of 1.4% at 0.1x.
     PioneerDDJSX.scratchSettings = {
-        'alpha': 1.0 / 8,
-        'beta': 1.0 / 8 / 32,
+        'alpha': 1.0 / 4,
+        'beta': 1.0 / 4 / 16,
         'jogResolution': 2048,
         'vinylSpeed': 33 + 1 / 3,
     };
