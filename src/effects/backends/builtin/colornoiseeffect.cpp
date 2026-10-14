@@ -7,6 +7,7 @@
 #include "engine/effects/engineeffectparameter.h"
 #include "engine/filters/enginefilterbiquad1.h"
 #include "util/rampingvalue.h"
+#include "util/sample.h"
 
 namespace {
 const QString kColorParameterId = QStringLiteral("color");
@@ -127,23 +128,41 @@ void ColorNoiseEffect::processChannel(
         pState->highPassCutoff = targetHighPassCutoff;
     }
 
+    // The color ramp is monotonic, so a path can contribute only when one end
+    // of the ramp lies on its side of the dead zone.
+    const bool lowPassUsed = targetLeftDistance > 0.0 ||
+            leftDistance(pState->previousColor) > 0.0;
+    const bool highPassUsed = targetRightDistance > 0.0 ||
+            rightDistance(pState->previousColor) > 0.0;
+    if (!lowPassUsed && !highPassUsed) {
+        // The whole buffer is in the dead zone, where the noise gain is zero.
+        SampleUtil::copy(pOutput, pInput, engineParameters.samplesPerBuffer());
+        pState->previousColor = targetColor;
+        return;
+    }
+
     std::uniform_real_distribution<CSAMPLE> noiseDistribution(-1.0f, 1.0f);
     for (SINT i = 0; i < engineParameters.samplesPerBuffer(); ++i) {
         pState->noiseBuffer[i] = noiseDistribution(pState->generator);
     }
-    pState->lowPassFilter->process(pState->noiseBuffer.data(),
-            pState->lowPassBuffer.data(),
-            engineParameters.samplesPerBuffer());
-    pState->highPassFilter->process(pState->noiseBuffer.data(),
-            pState->highPassBuffer.data(),
-            engineParameters.samplesPerBuffer());
+    if (lowPassUsed) {
+        pState->lowPassFilter->process(pState->noiseBuffer.data(),
+                pState->lowPassBuffer.data(),
+                engineParameters.samplesPerBuffer());
+    }
+    if (highPassUsed) {
+        pState->highPassFilter->process(pState->noiseBuffer.data(),
+                pState->highPassBuffer.data(),
+                engineParameters.samplesPerBuffer());
+    }
 
     RampingValue<CSAMPLE_GAIN> colorRamp(
             pState->previousColor, targetColor, engineParameters.samplesPerBuffer());
     for (SINT i = 0; i < engineParameters.samplesPerBuffer(); ++i) {
         const CSAMPLE_GAIN color = colorRamp.getNth(i);
-        const CSAMPLE_GAIN leftAmount = leftDistance(color);
-        const CSAMPLE_GAIN rightAmount = rightDistance(color);
+        // Never mix a path whose filter did not run for this buffer.
+        const CSAMPLE_GAIN leftAmount = lowPassUsed ? leftDistance(color) : 0.0f;
+        const CSAMPLE_GAIN rightAmount = highPassUsed ? rightDistance(color) : 0.0f;
         const CSAMPLE_GAIN amount = leftAmount + rightAmount;
         const CSAMPLE filteredNoise = leftAmount > 0.0f
                 ? pState->lowPassBuffer[i]

@@ -47,6 +47,34 @@ double logarithmicRange(double minimum, double maximum, double amount) {
     return std::exp(std::log(minimum) +
             std::clamp(amount, 0.0, 1.0) * std::log(maximum / minimum));
 }
+
+struct ColorCoefficients {
+    CSAMPLE_GAIN leftAmount;
+    CSAMPLE_GAIN rightAmount;
+    CSAMPLE_GAIN amount;
+    CSAMPLE_GAIN directionFilterMix;
+    double lowPassAlpha;
+    double highPassAlpha;
+};
+
+ColorCoefficients coefficientsForColor(CSAMPLE_GAIN color, double sampleRate) {
+    ColorCoefficients coefficients;
+    coefficients.leftAmount = leftDistance(color);
+    coefficients.rightAmount = rightDistance(color);
+    coefficients.amount = coefficients.leftAmount + coefficients.rightAmount;
+    const double directionDistance =
+            std::max(coefficients.leftAmount, coefficients.rightAmount);
+    coefficients.directionFilterMix = filterMix(directionDistance);
+    const double lowPassCutoff =
+            logarithmicRange(8000.0, 700.0, coefficients.leftAmount);
+    coefficients.lowPassAlpha =
+            1.0 - std::exp(-2.0 * kPi * lowPassCutoff / sampleRate);
+    const double highPassCutoff =
+            logarithmicRange(80.0, 2600.0, coefficients.rightAmount);
+    const double highPassRc = 1.0 / (2.0 * kPi * highPassCutoff);
+    coefficients.highPassAlpha = highPassRc / (highPassRc + 1.0 / sampleRate);
+    return coefficients;
+}
 } // namespace
 
 constexpr int ColorDubEchoGroupState::kMaxDelaySeconds;
@@ -147,21 +175,24 @@ void ColorDubEchoEffect::processChannel(
 
     RampingValue<CSAMPLE_GAIN> colorRamp(
             pState->previousColor, targetColor, engineParameters.framesPerBuffer());
+    // The coefficients cost several exp/log calls. They only change while the
+    // color ramps, so a steady knob computes them once per buffer.
+    const double sampleRate = engineParameters.sampleRate();
+    CSAMPLE_GAIN coefficientColor = colorRamp.getNth(0);
+    ColorCoefficients coefficients =
+            coefficientsForColor(coefficientColor, sampleRate);
     int frame = 0;
     for (SINT i = 0; i < engineParameters.samplesPerBuffer(); i += channelCount) {
         const CSAMPLE_GAIN color = colorRamp.getNth(frame++);
-        const CSAMPLE_GAIN leftAmount = leftDistance(color);
-        const CSAMPLE_GAIN rightAmount = rightDistance(color);
-        const CSAMPLE_GAIN amount = leftAmount + rightAmount;
-        const double directionDistance = std::max(leftAmount, rightAmount);
-        const CSAMPLE_GAIN directionFilterMix = filterMix(directionDistance);
-        const double lowPassCutoff = logarithmicRange(8000.0, 700.0, leftAmount);
-        const double lowPassAlpha = 1.0 - std::exp(
-                -2.0 * kPi * lowPassCutoff / engineParameters.sampleRate());
-        const double highPassCutoff = logarithmicRange(80.0, 2600.0, rightAmount);
-        const double highPassRc = 1.0 / (2.0 * kPi * highPassCutoff);
-        const double highPassAlpha = highPassRc /
-                (highPassRc + 1.0 / engineParameters.sampleRate());
+        if (color != coefficientColor) {
+            coefficientColor = color;
+            coefficients = coefficientsForColor(color, sampleRate);
+        }
+        const CSAMPLE_GAIN leftAmount = coefficients.leftAmount;
+        const CSAMPLE_GAIN amount = coefficients.amount;
+        const CSAMPLE_GAIN directionFilterMix = coefficients.directionFilterMix;
+        const double lowPassAlpha = coefficients.lowPassAlpha;
+        const double highPassAlpha = coefficients.highPassAlpha;
         const CSAMPLE_GAIN delayCrossfade =
                 static_cast<CSAMPLE_GAIN>(i) /
                 engineParameters.samplesPerBuffer();
