@@ -975,14 +975,14 @@ TEST_F(EngineBufferTest, JogNudgeTakesEffectWithin50ms) {
     ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
     ProcessBuffer();
     ProcessBuffer();
-    ASSERT_EQ(1.0, m_pChannel1->getEngineBuffer()->m_speed_old);
+    ASSERT_EQ(1.0, m_pChannel1->getEngineBuffer()->getSpeed());
 
     ControlObject::set(ConfigKey(m_sGroup1, "jog"), 5.0);
     double early = 0;
     double total = 0;
     for (int i = 0; i < 30; ++i) {
         ProcessBuffer();
-        const double bend = m_pChannel1->getEngineBuffer()->m_speed_old - 1.0;
+        const double bend = m_pChannel1->getEngineBuffer()->getSpeed() - 1.0;
         if (i < 4) {
             early += bend;
         }
@@ -991,7 +991,7 @@ TEST_F(EngineBufferTest, JogNudgeTakesEffectWithin50ms) {
     // The nudge moves the track as far as before, just sooner.
     EXPECT_NEAR(0.5, total, 1e-9);
     EXPECT_NEAR(total, early, 1e-9);
-    EXPECT_EQ(1.0, m_pChannel1->getEngineBuffer()->m_speed_old);
+    EXPECT_EQ(1.0, m_pChannel1->getEngineBuffer()->getSpeed());
 }
 
 TEST_F(EngineBufferTest, RatePermTest) {
