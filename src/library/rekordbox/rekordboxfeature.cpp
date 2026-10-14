@@ -1179,35 +1179,29 @@ void readAnalyze(TrackPointer track,
                     static_cast<rekordbox_anlz_t::beat_grid_tag_t*>(
                             section->body());
 
-            QVector<mixxx::audio::FramePos> beats;
+            QVector<mixxx::rekordbox::GridBeat> grid;
             int firstBeatNumber = 1;
-            mixxx::audio::FrameDiff_t firstBeatLengthFrames = 0.0;
 
             for (const auto& beat : *beatGridTag->beats()) {
-                if (beats.isEmpty()) {
+                if (grid.isEmpty()) {
                     firstBeatNumber = static_cast<int>(beat->beat_number());
-                    const int tempo = static_cast<int>(beat->tempo());
-                    if (tempo > 0) {
-                        firstBeatLengthFrames =
-                                60.0 * 100.0 * sampleRate / tempo;
-                    }
                 }
                 int time = static_cast<int>(beat->time()) - timingOffset;
                 // Ensure no offset times are less than 1
                 if (time < 1) {
                     time = 1;
                 }
-                beats << mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
+                grid.append({mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time)),
+                        static_cast<int>(beat->tempo())});
             }
 
-            beats = mixxx::rekordbox::withDownbeatAnchor(
-                    beats, firstBeatNumber, firstBeatLengthFrames);
-
-            const auto pBeats = mixxx::Beats::fromBeatPositions(
-                    sampleRate,
-                    beats,
+            const auto pBeats = mixxx::rekordbox::beatsFromGrid(sampleRate,
+                    grid,
+                    firstBeatNumber,
                     mixxx::rekordboxconstants::beatsSubversion);
-            track->trySetBeats(pBeats);
+            if (pBeats) {
+                track->trySetBeats(pBeats);
+            }
         } break;
         case rekordbox_anlz_t::SECTION_TAGS_CUES: {
             if (ignoreCues) {

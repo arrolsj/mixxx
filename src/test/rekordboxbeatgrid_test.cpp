@@ -54,6 +54,57 @@ TEST(RekordboxBeatGridTest, RejectsInvalidBarPhaseOrTempo) {
     EXPECT_EQ(positions, withDownbeatAnchor(positions, 3, 0.0));
 }
 
+constexpr audio::SampleRate kSampleRate(44100);
+
+// Rekordbox stores beat times in whole milliseconds and the tempo in BPM * 100.
+QVector<GridBeat> exportedGrid(double firstBeatMs, int beats, int tempo) {
+    QVector<GridBeat> grid;
+    for (int i = 0; i < beats; ++i) {
+        const double ms = std::round(firstBeatMs + i * 60000.0 * 100.0 / tempo);
+        grid.append({audio::FramePos(kSampleRate.value() * ms / 1000.0), tempo});
+    }
+    return grid;
+}
+
+TEST(RekordboxBeatGridTest, ConstantTempoUsesExportedBpmWithoutJitter) {
+    // 128 BPM beats are 468.75 ms apart; the rounded times alternate.
+    const auto grid = exportedGrid(1000.0, 64, 12800);
+    const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
+    ASSERT_TRUE(beats);
+    for (const auto& beat : grid) {
+        EXPECT_NEAR(128.0, beats->getBpmAroundPosition(beat.position, 4).value(), 1e-6);
+        // Each grid beat stays within half a millisecond of the export.
+        EXPECT_NEAR(beat.position.value(),
+                beats->findClosestBeat(beat.position).value(),
+                kSampleRate.value() * 0.0005 + 1);
+    }
+}
+
+TEST(RekordboxBeatGridTest, TempoChangesBecomeConstantSections) {
+    auto grid = exportedGrid(1000.0, 16, 12000);
+    const double secondStartMs = 1000.0 + 16 * 500.0;
+    grid += exportedGrid(secondStartMs, 16, 12600);
+    // Export starts on beat 3: two preroll beats anchor the first downbeat.
+    const auto beats = beatsFromGrid(kSampleRate, grid, 3, QString());
+    ASSERT_TRUE(beats);
+    ASSERT_EQ(1u, beats->getMarkers().size());
+    EXPECT_DOUBLE_EQ(kSampleRate.value() * 0.0, beats->getMarkers().front().position().value());
+    EXPECT_EQ(18, beats->getMarkers().front().beatsTillNextMarker());
+    EXPECT_NEAR(120.0, beats->getBpmAroundPosition(grid[6].position, 4).value(), 1e-6);
+    EXPECT_DOUBLE_EQ(126.0, beats->getLastMarkerBpm().value());
+    EXPECT_NEAR(126.0, beats->getBpmAroundPosition(grid[24].position, 4).value(), 1e-6);
+}
+
+TEST(RekordboxBeatGridTest, MissingTempoKeepsExportedPositions) {
+    auto grid = exportedGrid(1000.0, 8, 12800);
+    grid[4].tempo = 0;
+    const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
+    ASSERT_TRUE(beats);
+    for (const auto& beat : grid) {
+        EXPECT_NEAR(beat.position.value(), beats->findClosestBeat(beat.position).value(), 1.0);
+    }
+}
+
 // Synthetic PMAI/PQTZ/PCOB records exercise the production Kaitai parser and
 // playlist load path without writing to an exported Rekordbox device.
 QByteArray analyzeTag(const char* magic, const QByteArray& body) {
