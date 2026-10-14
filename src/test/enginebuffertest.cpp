@@ -6,11 +6,16 @@
 #include <QString>
 #include <QTest>
 #include <QtDebug>
+#include <algorithm>
+#include <cmath>
+#include <tuple>
 #include <soundtouch/SoundTouch.h>
 #include <vector>
 
 #include "control/controlobject.h"
 #include "engine/bufferscalers/enginebufferscalest.h"
+#include "engine/bufferscalers/enginebufferscaletransient.h"
+#include "engine/bufferscalers/transientwsola.h"
 #ifdef __RUBBERBAND__
 #include "engine/bufferscalers/enginebufferscalerubberband.h"
 #endif
@@ -145,6 +150,128 @@ TEST_F(EngineBufferScaleSTTest, UsesShortFixedSequencesThatKeepDrumAttacks) {
     EXPECT_EQ(renderBareSoundTouch(kTempo, 30, 10), actual);
     // 0 selects SoundTouch's automatic (long) sequence and seek window.
     EXPECT_NE(renderBareSoundTouch(kTempo, 0, 0), actual);
+}
+
+// Low sine bed with short noise bursts ("drum hits") every 250 ms.
+std::vector<CSAMPLE> makeClickTrain(SINT frames, SINT period, std::vector<SINT>* pClicks) {
+    std::vector<CSAMPLE> signal(2 * frames);
+    uint32_t noise = 12345;
+    for (SINT i = 0; i < frames; ++i) {
+        float value = 0.1f * std::sin(2 * M_PI * 110 * i / 44100.0);
+        const SINT phase = i % period;
+        if (i >= period && phase < 132) {
+            noise = noise * 1664525u + 1013904223u;
+            const float burst = static_cast<float>(noise >> 8) / (1 << 24) * 2 - 1;
+            value += 0.8f * burst * (1.0f - static_cast<float>(phase) / 132);
+            if (phase == 0) {
+                pClicks->push_back(i);
+            }
+        }
+        signal[2 * i] = value;
+        signal[2 * i + 1] = value;
+    }
+    return signal;
+}
+
+std::vector<CSAMPLE> stretchAll(TransientWsola* pStretch, const std::vector<CSAMPLE>& input) {
+    std::vector<CSAMPLE> output;
+    std::vector<CSAMPLE> block(1024);
+    const SINT frames = static_cast<SINT>(input.size() / 2);
+    for (SINT pos = 0; pos < frames;) {
+        const SINT n = std::min<SINT>({512, frames - pos, pStretch->freeInputFrames()});
+        pStretch->putSamples(input.data() + 2 * pos, n);
+        pos += n;
+        SINT got;
+        while ((got = pStretch->receiveSamples(block.data(), 512)) > 0) {
+            output.insert(output.end(), block.begin(), block.begin() + 2 * got);
+        }
+    }
+    return output;
+}
+
+class TransientWsolaTest : public MixxxTest {
+};
+
+TEST_F(TransientWsolaTest, UnityTempoAndRateAreTransparent) {
+    std::vector<SINT> clicks;
+    const std::vector<CSAMPLE> input = makeClickTrain(44100, 11025, &clicks);
+    TransientWsola stretch(44100);
+    const std::vector<CSAMPLE> output = stretchAll(&stretch, input);
+    ASSERT_GT(output.size(), input.size() / 2);
+    EXPECT_TRUE(std::equal(output.begin(), output.end(), input.begin()));
+}
+
+TEST_F(TransientWsolaTest, KeepsLongTermTempo) {
+    std::vector<SINT> clicks;
+    const std::vector<CSAMPLE> input = makeClickTrain(5 * 44100, 11025, &clicks);
+    TransientWsola stretch(44100);
+    stretch.setTempo(1.16);
+    const SINT produced = static_cast<SINT>(stretchAll(&stretch, input).size() / 2);
+    // Output lags by at most the lookahead plus one deferred join.
+    const double expected = 5 * 44100 / 1.16;
+    EXPECT_GT(produced, expected - 0.15 * 44100);
+    EXPECT_LE(produced, expected + 1);
+}
+
+TEST_F(TransientWsolaTest, SpeedUpKeepsEveryDrumHitIntact) {
+    for (const double tempo : {0.84, 1.08, 1.16}) {
+        SCOPED_TRACE(tempo);
+        std::vector<SINT> clicks;
+        const std::vector<CSAMPLE> input = makeClickTrain(8 * 44100, 11025, &clicks);
+        TransientWsola stretch(44100);
+        stretch.setTempo(tempo);
+        const std::vector<CSAMPLE> output = stretchAll(&stretch, input);
+        EXPECT_GT(stretch.stats().onsets, 0);
+        // Every burst must appear once with its full attack: its first
+        // 2 ms are copied, not crossfaded or skipped.
+        int found = 0;
+        for (SINT click : clicks) {
+            const double outPos = click / tempo;
+            float peak = 0;
+            float inputPeak = 0;
+            for (SINT i = 0; i < 88; ++i) {
+                inputPeak = std::max(inputPeak, std::fabs(input[2 * (click + i)]));
+            }
+            const SINT from = static_cast<SINT>(outPos) - 2205;
+            const SINT to = static_cast<SINT>(outPos) + 2205;
+            if (from < 0 || 2 * to >= static_cast<SINT>(output.size())) {
+                continue;
+            }
+            for (SINT i = from; i < to; ++i) {
+                peak = std::max(peak, std::fabs(output[2 * i]));
+            }
+            EXPECT_GE(peak, 0.97f * inputPeak) << "burst at " << click;
+            ++found;
+        }
+        EXPECT_GE(found, static_cast<int>(clicks.size()) - 2);
+    }
+}
+
+class EngineBufferScaleTransientTest : public MixxxTest {
+};
+
+TEST_F(EngineBufferScaleTransientTest, PitchAndTrackRateProduceFiniteAudio) {
+    for (const auto& [baseRate, tempo, pitch] : std::vector<std::tuple<double, double, double>>{
+                 {1.0, 1.04, 1.0}, {48000.0 / 44100, 0.92, 1.0}, {1.0, 1.0, 1.06}}) {
+        SCOPED_TRACE(QString("%1 %2 %3").arg(baseRate).arg(tempo).arg(pitch).toStdString());
+        SoundTouchPaddingReader reader(false);
+        EngineBufferScaleTransient scaler(&reader);
+        scaler.setSampleRate(mixxx::audio::SampleRate(44100));
+        double tempoRatio = tempo;
+        double pitchRatio = pitch;
+        scaler.setScaleParameters(baseRate, &tempoRatio, &pitchRatio);
+        scaler.clear();
+        std::vector<CSAMPLE> output(1024);
+        double consumed = 0;
+        for (int block = 0; block < 64; ++block) {
+            consumed += scaler.scaleBuffer(output.data(), 1024);
+            for (CSAMPLE sample : output) {
+                ASSERT_TRUE(std::isfinite(sample));
+                ASSERT_LE(std::fabs(sample), 1.5f);
+            }
+        }
+        EXPECT_NEAR(consumed, 64 * 512 * baseRate * tempo, 1e-6 * consumed);
+    }
 }
 #ifdef __RUBBERBAND__
 class EngineBufferScaleRubberBandTest : public MixxxTest {

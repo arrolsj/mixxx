@@ -46,6 +46,7 @@ class ControlPotmeter;
 class EngineBufferScale;
 class EngineBufferScaleLinear;
 class EngineBufferScaleST;
+class EngineBufferScaleTransient;
 class EngineSync;
 class EngineWorkerScheduler;
 class VisualPlayPosition;
@@ -88,6 +89,7 @@ class EngineBuffer : public EngineObject {
         RubberBandFaster = 1,
         RubberBandFiner = 2,
 #endif
+        TransientWsola = 3,
     };
 
     // intended for iteration over the KeylockEngine enum
@@ -95,8 +97,9 @@ class EngineBuffer : public EngineObject {
             KeylockEngine::SoundTouch,
 #ifdef __RUBBERBAND__
             KeylockEngine::RubberBandFaster,
-            KeylockEngine::RubberBandFiner
+            KeylockEngine::RubberBandFiner,
 #endif
+            KeylockEngine::TransientWsola,
     };
 
     EngineBuffer(const QString& group,
@@ -168,6 +171,8 @@ class EngineBuffer : public EngineObject {
         switch (engine) {
         case KeylockEngine::SoundTouch:
             return tr("Soundtouch (faster)");
+        case KeylockEngine::TransientWsola:
+            return tr("Transient-aware (sharp drums)");
 #ifdef __RUBBERBAND__
         case KeylockEngine::RubberBandFaster:
             return tr("Rubberband (better)");
@@ -189,6 +194,7 @@ class EngineBuffer : public EngineObject {
     static bool isKeylockEngineAvailable(KeylockEngine engine) {
         switch (engine) {
         case KeylockEngine::SoundTouch:
+        case KeylockEngine::TransientWsola:
             return true;
 #ifdef __RUBBERBAND__
         case KeylockEngine::RubberBandFaster:
@@ -437,6 +443,7 @@ class EngineBuffer : public EngineObject {
     EngineBufferScaleLinear* m_pScaleLinear;
     // Objects used for pitch-indep time stretch (key lock) scaling of the audio
     EngineBufferScaleST* m_pScaleST;
+    EngineBufferScaleTransient* m_pScaleTransient;
 #ifdef __RUBBERBAND__
     EngineBufferScaleRubberBand* m_pScaleRB;
 #endif

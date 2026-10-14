@@ -880,6 +880,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/engine/bufferscalers/enginebufferscale.cpp
   src/engine/bufferscalers/enginebufferscalelinear.cpp
   src/engine/bufferscalers/enginebufferscalest.cpp
+  src/engine/bufferscalers/enginebufferscaletransient.cpp
+  src/engine/bufferscalers/transientwsola.cpp
   src/engine/cachingreader/cachingreader.cpp
   src/engine/cachingreader/cachingreaderchunk.cpp
   src/engine/cachingreader/cachingreaderworker.cpp
