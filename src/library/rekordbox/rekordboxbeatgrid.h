@@ -48,26 +48,28 @@ struct GridBeat {
     int tempo;
 };
 
-/// Build beats from Rekordbox's own tempo values. Its beat times are rounded
-/// to whole milliseconds, so a beat map of those times makes the local BPM
-/// wander by about 0.1. Each run of beats with the same exported tempo
-/// becomes one constant-tempo section starting at its first beat, which
-/// reproduces Rekordbox's grid and BPM. A grid with a missing tempo keeps
-/// the exported beat positions.
+/// Build beats from a Rekordbox beat grid. Its beat times are rounded to
+/// whole milliseconds, so a beat map of those times makes the local BPM
+/// wander by about 0.1. Each run of beats with the same exported tempo is
+/// fitted with a least-squares line and becomes one constant-tempo section.
+/// The fitted beat length, not the exported tempo (rounded to 0.01 BPM),
+/// keeps long tracks on Rekordbox's beats. A grid that does not fit within
+/// the rounding tolerance (e.g. edited by hand) or lacks a tempo keeps the
+/// exported beat positions.
 inline BeatsPointer beatsFromGrid(audio::SampleRate sampleRate,
         const QVector<GridBeat>& grid,
         int firstBeatNumber,
         const QString& subVersion) {
     constexpr int kBeatsPerBar = 4;
+    // Millisecond rounding of the exported times plus a margin.
+    constexpr double kFitToleranceSeconds = 0.0015;
     if (grid.isEmpty()) {
         return nullptr;
     }
     const auto beatLength = [sampleRate](int tempo) {
         return 60.0 * 100.0 * sampleRate.value() / tempo;
     };
-    if (std::any_of(grid.cbegin(), grid.cend(), [](const GridBeat& beat) {
-            return beat.tempo <= 0;
-        })) {
+    const auto exportedPositions = [&] {
         QVector<audio::FramePos> positions;
         positions.reserve(grid.size());
         for (const auto& beat : grid) {
@@ -79,45 +81,82 @@ inline BeatsPointer beatsFromGrid(audio::SampleRate sampleRate,
                         firstBeatNumber,
                         firstTempo > 0 ? beatLength(firstTempo) : 0.0),
                 subVersion);
+    };
+    if (std::any_of(grid.cbegin(), grid.cend(), [](const GridBeat& beat) {
+            return beat.tempo <= 0;
+        })) {
+        return exportedPositions();
+    }
+
+    struct Section {
+        int count;
+        double first;
+        double length;
+    };
+    std::vector<Section> sections;
+    const double tolerance = kFitToleranceSeconds * sampleRate.value();
+    for (int start = 0; start < grid.size();) {
+        int end = start + 1;
+        while (end < grid.size() && grid[end].tempo == grid[start].tempo) {
+            ++end;
+        }
+        const int count = end - start;
+        Section section{count, grid[start].position.value(), beatLength(grid[start].tempo)};
+        if (count >= 2) {
+            const double meanIndex = (count - 1) / 2.0;
+            double meanPosition = 0;
+            for (int i = start; i < end; ++i) {
+                meanPosition += grid[i].position.value();
+            }
+            meanPosition /= count;
+            double covariance = 0;
+            double variance = 0;
+            for (int i = 0; i < count; ++i) {
+                covariance += (i - meanIndex) * (grid[start + i].position.value() - meanPosition);
+                variance += (i - meanIndex) * (i - meanIndex);
+            }
+            section.length = covariance / variance;
+            section.first = meanPosition - section.length * meanIndex;
+            for (int i = 0; i < count; ++i) {
+                const double fitted = section.first + i * section.length;
+                if (std::abs(grid[start + i].position.value() - fitted) > tolerance) {
+                    return exportedPositions();
+                }
+            }
+        }
+        if (!(section.length > 0)) {
+            return exportedPositions();
+        }
+        sections.push_back(section);
+        start = end;
     }
 
     const auto frame = [](double position) {
         return audio::FramePos(std::round(position));
     };
-    const auto bpm = [](int tempo) {
-        return Bpm(tempo / 100.0);
+    const auto bpm = [sampleRate](double length) {
+        return Bpm(60.0 * sampleRate.value() / length);
     };
     // Prepend beats before an export that starts on beat 2, 3 or 4, so the
     // first section starts on a downbeat (see withDownbeatAnchor).
     const int preroll = firstBeatNumber > 1 && firstBeatNumber <= kBeatsPerBar
             ? firstBeatNumber - 1
             : 0;
-    const double anchor = grid.first().position.value() -
-            preroll * beatLength(grid.first().tempo);
-
-    std::vector<int> sectionStarts{0};
-    for (int i = 1; i < grid.size(); ++i) {
-        if (grid[i].tempo != grid[i - 1].tempo) {
-            sectionStarts.push_back(i);
-        }
-    }
-    if (sectionStarts.size() == 1) {
+    const double anchor = sections.front().first - preroll * sections.front().length;
+    if (sections.size() == 1) {
         return Beats::fromConstTempo(
-                sampleRate, frame(anchor), bpm(grid.first().tempo), subVersion);
+                sampleRate, frame(anchor), bpm(sections.front().length), subVersion);
     }
     std::vector<BeatMarker> markers;
-    for (std::size_t section = 0; section + 1 < sectionStarts.size(); ++section) {
-        const int start = sectionStarts[section];
-        const int beats = sectionStarts[section + 1] - start;
-        markers.emplace_back(
-                frame(section == 0 ? anchor : grid[start].position.value()),
-                section == 0 ? beats + preroll : beats);
+    for (std::size_t i = 0; i + 1 < sections.size(); ++i) {
+        markers.emplace_back(frame(i == 0 ? anchor : sections[i].first),
+                i == 0 ? sections[i].count + preroll : sections[i].count);
     }
-    const GridBeat& last = grid[sectionStarts.back()];
+    const Section& last = sections.back();
     return Beats::fromBeatMarkers(sampleRate,
             markers,
-            frame(last.position.value()),
-            bpm(last.tempo),
+            frame(last.first),
+            bpm(last.length),
             subVersion);
 }
 

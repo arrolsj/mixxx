@@ -57,26 +57,59 @@ TEST(RekordboxBeatGridTest, RejectsInvalidBarPhaseOrTempo) {
 constexpr audio::SampleRate kSampleRate(44100);
 
 // Rekordbox stores beat times in whole milliseconds and the tempo in BPM * 100.
-QVector<GridBeat> exportedGrid(double firstBeatMs, int beats, int tempo) {
+// The grid itself may run at a tempo the 0.01 BPM field only approximates.
+QVector<GridBeat> exportedGrid(double firstBeatMs, int beats, int tempo, double gridBpm = 0) {
+    const double beatMs = 60000.0 / (gridBpm > 0 ? gridBpm : tempo / 100.0);
     QVector<GridBeat> grid;
     for (int i = 0; i < beats; ++i) {
-        const double ms = std::round(firstBeatMs + i * 60000.0 * 100.0 / tempo);
+        const double ms = std::round(firstBeatMs + i * beatMs);
         grid.append({audio::FramePos(kSampleRate.value() * ms / 1000.0), tempo});
     }
     return grid;
 }
 
-TEST(RekordboxBeatGridTest, ConstantTempoUsesExportedBpmWithoutJitter) {
+void expectOnExportedBeats(const BeatsPointer& beats, const QVector<GridBeat>& grid) {
+    for (const auto& beat : grid) {
+        // Within the export's millisecond rounding.
+        EXPECT_NEAR(beat.position.value(),
+                beats->findClosestBeat(beat.position).value(),
+                kSampleRate.value() * 0.0005 + 1);
+    }
+}
+
+TEST(RekordboxBeatGridTest, ConstantTempoGridHasNoBpmJitter) {
     // 128 BPM beats are 468.75 ms apart; the rounded times alternate.
     const auto grid = exportedGrid(1000.0, 64, 12800);
     const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
     ASSERT_TRUE(beats);
+    const double bpm = beats->getBpmAroundPosition(grid[4].position, 4).value();
+    EXPECT_NEAR(128.0, bpm, 0.01);
     for (const auto& beat : grid) {
-        EXPECT_NEAR(128.0, beats->getBpmAroundPosition(beat.position, 4).value(), 1e-6);
-        // Each grid beat stays within half a millisecond of the export.
-        EXPECT_NEAR(beat.position.value(),
-                beats->findClosestBeat(beat.position).value(),
-                kSampleRate.value() * 0.0005 + 1);
+        EXPECT_NEAR(bpm, beats->getBpmAroundPosition(beat.position, 4).value(), 1e-6);
+    }
+    expectOnExportedBeats(beats, grid);
+}
+
+TEST(RekordboxBeatGridTest, RoundedTempoFieldDoesNotDriftLongTracks) {
+    // A 127.996 BPM grid exported with tempo 128.00: a grid built from the
+    // field would be 10 ms off after 600 beats.
+    const auto grid = exportedGrid(1000.0, 600, 12800, 127.996);
+    const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
+    ASSERT_TRUE(beats);
+    EXPECT_NEAR(127.996, beats->getBpmAroundPosition(grid[300].position, 4).value(), 1e-3);
+    expectOnExportedBeats(beats, grid);
+}
+
+TEST(RekordboxBeatGridTest, EditedGridKeepsExportedPositions) {
+    // A grid moved by hand partway through is not one straight line.
+    auto grid = exportedGrid(1000.0, 64, 12800);
+    for (int i = 32; i < grid.size(); ++i) {
+        grid[i].position = grid[i].position + kSampleRate.value() * 0.020;
+    }
+    const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
+    ASSERT_TRUE(beats);
+    for (const auto& beat : grid) {
+        EXPECT_NEAR(beat.position.value(), beats->findClosestBeat(beat.position).value(), 1.0);
     }
 }
 
@@ -91,8 +124,9 @@ TEST(RekordboxBeatGridTest, TempoChangesBecomeConstantSections) {
     EXPECT_DOUBLE_EQ(kSampleRate.value() * 0.0, beats->getMarkers().front().position().value());
     EXPECT_EQ(18, beats->getMarkers().front().beatsTillNextMarker());
     EXPECT_NEAR(120.0, beats->getBpmAroundPosition(grid[6].position, 4).value(), 1e-6);
-    EXPECT_DOUBLE_EQ(126.0, beats->getLastMarkerBpm().value());
-    EXPECT_NEAR(126.0, beats->getBpmAroundPosition(grid[24].position, 4).value(), 1e-6);
+    EXPECT_NEAR(126.0, beats->getLastMarkerBpm().value(), 0.01);
+    EXPECT_NEAR(126.0, beats->getBpmAroundPosition(grid[24].position, 4).value(), 0.01);
+    expectOnExportedBeats(beats, grid);
 }
 
 TEST(RekordboxBeatGridTest, MissingTempoKeepsExportedPositions) {
