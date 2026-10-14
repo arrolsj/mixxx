@@ -970,6 +970,30 @@ TEST_F(EngineBufferTest, RateTempTest) {
 }
 
 
+TEST_F(EngineBufferTest, JogNudgeTakesEffectWithin50ms) {
+    // 512 frames at 44.1 kHz: four callbacks are 46 ms.
+    ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    ASSERT_EQ(1.0, m_pChannel1->getEngineBuffer()->m_speed_old);
+
+    ControlObject::set(ConfigKey(m_sGroup1, "jog"), 5.0);
+    double early = 0;
+    double total = 0;
+    for (int i = 0; i < 30; ++i) {
+        ProcessBuffer();
+        const double bend = m_pChannel1->getEngineBuffer()->m_speed_old - 1.0;
+        if (i < 4) {
+            early += bend;
+        }
+        total += bend;
+    }
+    // The nudge moves the track as far as before, just sooner.
+    EXPECT_NEAR(0.5, total, 1e-9);
+    EXPECT_NEAR(total, early, 1e-9);
+    EXPECT_EQ(1.0, m_pChannel1->getEngineBuffer()->m_speed_old);
+}
+
 TEST_F(EngineBufferTest, RatePermTest) {
     RateControl::setPermanentRateChangeCoarseAmount(4);
     RateControl::setPermanentRateChangeFineAmount(2);

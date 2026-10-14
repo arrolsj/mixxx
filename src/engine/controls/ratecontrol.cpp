@@ -1,6 +1,7 @@
 #include "engine/controls/ratecontrol.h"
 
 #include <QtDebug>
+#include <cmath>
 
 #include "control/controlobject.h"
 #include "control/controlpotmeter.h"
@@ -9,6 +10,7 @@
 #include "control/controlttrotary.h"
 #include "engine/controls/bpmcontrol.h"
 #include "engine/controls/enginecontrol.h"
+#include "engine/engine.h"
 #include "engine/positionscratchcontroller.h"
 #include "moc_ratecontrol.cpp"
 #include "util/rotary.h"
@@ -98,6 +100,7 @@ RateControl::RateControl(const QString& group, UserSettingsPointer pConfig)
           m_pJog(std::make_unique<ControlObject>(
                   ConfigKey(group, QStringLiteral("jog")))),
           m_pJogFilter(std::make_unique<Rotary>()),
+          m_jogFilterBufferSamples(0),
           // Vinyl control
           m_pVCEnabled(ControlObject::getControl(ConfigKey(
                   getGroup(), QStringLiteral("vinylcontrol_enabled")))),
@@ -196,7 +199,7 @@ RateControl::RateControl(const QString& group, UserSettingsPointer pConfig)
     // this control.
     m_pScratch2Scratching->set(1.0);
 
-    // FIXME: This should be dependent on sample rate/block size or something
+    // Until the first callback tells the buffer size (see updateJogFilterLength).
     m_pJogFilter->setFilterLength(25);
 
 //     // Update Internal Settings
@@ -366,6 +369,24 @@ double RateControl::getWheelFactor() const {
     return m_pWheel->get();
 }
 
+void RateControl::updateJogFilterLength(const int bufferSamples) {
+    // Average jog nudges over a fixed time instead of a fixed number of
+    // callbacks: 25 callbacks of 512 frames at 44.1 kHz delayed a nudge by
+    // 290 ms. The length does not change how far a nudge moves the track.
+    constexpr double kJogFilterSeconds = 0.05;
+    const double sampleRate = m_pSampleRate.get();
+    if (bufferSamples == m_jogFilterBufferSamples || bufferSamples <= 0 ||
+            sampleRate <= 0) {
+        return;
+    }
+    m_jogFilterBufferSamples = bufferSamples;
+    const double bufferSeconds = static_cast<double>(bufferSamples) /
+            mixxx::kEngineChannelCount / sampleRate;
+    m_pJogFilter->setFilterLength(
+            static_cast<int>(std::lround(kJogFilterSeconds / bufferSeconds)));
+    m_pJogFilter->fillBuffer(0.0);
+}
+
 double RateControl::getJogFactor() const {
     // FIXME: Sensitivity should be configurable separately?
     constexpr double jogSensitivity = 0.1; // Nudges during playback
@@ -398,6 +419,7 @@ double RateControl::calculateSpeed(double baserate, double speed, bool paused,
     *pReportReverse = false;
 
     processTempRate(iSamplesPerBuffer);
+    updateJogFilterLength(iSamplesPerBuffer);
 
     double rate;
     const double searching = m_pRateSearch->get();

@@ -114,15 +114,19 @@ PioneerDDJSX.chFaderStart = [null, null, null, null];
 PioneerDDJSX.scratchMode = [true, true, true, true];
 // Keep scratch active while the platter is still emitting real movement after touch release.
 // This timer only detects that the MIDI ticks have gone quiet; it never generates movement.
-PioneerDDJSX.jogReleasePollMs = 25;
-PioneerDDJSX.jogReleaseQuietMs = 125;
+// The first check runs one poll (20 ms, the shortest script timer) after the release: the
+// SX3 touch sensor drops out for up to 10 ms while the platter is held, and that dropout
+// must not restart playback. A platter that was already still is released then; a moving
+// one once its ticks (at most 16 ms apart while moving) have stopped for the quiet time.
+PioneerDDJSX.jogReleasePollMs = 20;
+PioneerDDJSX.jogReleaseQuietMs = 40;
 // Some controllers keep sending small non-zero ticks after touch release. Never let
 // that noise hold Mixxx in scratch mode indefinitely.
 PioneerDDJSX.jogReleaseMaxMs = 2000;
 PioneerDDJSX.jogReleasePending = [false, false, false, false];
 PioneerDDJSX.jogReleaseTimer = [0, 0, 0, 0];
-PioneerDDJSX.jogReleaseQuietElapsed = [0, 0, 0, 0];
-PioneerDDJSX.jogReleaseElapsed = [0, 0, 0, 0];
+PioneerDDJSX.jogReleaseStart = [0, 0, 0, 0];
+PioneerDDJSX.jogLastMovement = [0, 0, 0, 0];
 PioneerDDJSX.jogLastDirection = [0, 0, 0, 0];
 PioneerDDJSX.jogWasPlaying = [false, false, false, false];
 PioneerDDJSX.wheelLedsBlinkStatus = [0, 0, 0, 0];
@@ -2224,8 +2228,6 @@ PioneerDDJSX.cancelJogRelease = function(deck) {
         PioneerDDJSX.jogReleaseTimer[deck] = 0;
     }
     PioneerDDJSX.jogReleasePending[deck] = false;
-    PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
-    PioneerDDJSX.jogReleaseElapsed[deck] = 0;
 };
 
 PioneerDDJSX.releaseJogScratch = function(deck) {
@@ -2245,8 +2247,6 @@ PioneerDDJSX.finishJogRelease = function(deck) {
         return;
     }
     PioneerDDJSX.jogReleasePending[deck] = false;
-    PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
-    PioneerDDJSX.jogReleaseElapsed[deck] = 0;
     if (timer) {
         engine.stopTimer(timer);
     }
@@ -2260,15 +2260,13 @@ PioneerDDJSX.finishJogRelease = function(deck) {
 PioneerDDJSX.scheduleJogRelease = function(deck) {
     PioneerDDJSX.cancelJogRelease(deck);
     PioneerDDJSX.jogReleasePending[deck] = true;
-    PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
-    PioneerDDJSX.jogReleaseElapsed[deck] = 0;
+    PioneerDDJSX.jogReleaseStart[deck] = Date.now();
     PioneerDDJSX.jogReleaseTimer[deck] = engine.beginTimer(
         PioneerDDJSX.jogReleasePollMs,
         function() {
-            PioneerDDJSX.jogReleaseQuietElapsed[deck] += PioneerDDJSX.jogReleasePollMs;
-            PioneerDDJSX.jogReleaseElapsed[deck] += PioneerDDJSX.jogReleasePollMs;
-            if (PioneerDDJSX.jogReleaseQuietElapsed[deck] >= PioneerDDJSX.jogReleaseQuietMs ||
-                    PioneerDDJSX.jogReleaseElapsed[deck] >= PioneerDDJSX.jogReleaseMaxMs) {
+            var now = Date.now();
+            if (now - PioneerDDJSX.jogLastMovement[deck] >= PioneerDDJSX.jogReleaseQuietMs ||
+                    now - PioneerDDJSX.jogReleaseStart[deck] >= PioneerDDJSX.jogReleaseMaxMs) {
                 PioneerDDJSX.finishJogRelease(deck);
             }
         }
@@ -2278,9 +2276,7 @@ PioneerDDJSX.scheduleJogRelease = function(deck) {
 PioneerDDJSX.noteJogReleaseMovement = function(deck, movement) {
     if (movement) {
         PioneerDDJSX.jogLastDirection[deck] = movement > 0 ? 1 : -1;
-    }
-    if (PioneerDDJSX.jogReleasePending[deck]) {
-        PioneerDDJSX.jogReleaseQuietElapsed[deck] = 0;
+        PioneerDDJSX.jogLastMovement[deck] = Date.now();
     }
 };
 
@@ -2308,9 +2304,7 @@ PioneerDDJSX.jogPlatterTick = function(channel, control, value, status, group) {
 
     if (PioneerDDJSX.scratchMode[deck] && engine.isScratching(deck + 1)) {
         engine.scratchTick(deck + 1, PioneerDDJSX.getJogWheelDelta(value));
-        if (PioneerDDJSX.jogReleasePending[deck]) {
-            PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
-        }
+        PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
     } else {
         PioneerDDJSX.pitchBendFromJog(group, PioneerDDJSX.getJogWheelDelta(value));
     }
@@ -2321,9 +2315,7 @@ PioneerDDJSX.jogPlatterTickShift = function(channel, control, value, status, gro
 
     if (PioneerDDJSX.scratchMode[deck] && engine.isScratching(deck + 1)) {
         engine.scratchTick(deck + 1, PioneerDDJSX.getJogWheelDelta(value));
-        if (PioneerDDJSX.jogReleasePending[deck]) {
-            PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
-        }
+        PioneerDDJSX.noteJogReleaseMovement(deck, PioneerDDJSX.getJogWheelDelta(value));
     } else {
         PioneerDDJSX.pitchBendFromJog(
             group,
@@ -2341,13 +2333,16 @@ PioneerDDJSX.jogTouch = function(channel, control, value, status, group) {
             PioneerDDJSX.jogLastDirection[deck] = 0;
             PioneerDDJSX.jogWasPlaying[deck] = engine.getValue(group, "play") > 0;
             if (!engine.isScratching(deck + 1)) {
+                // No ramp: a held platter stops the track at once, like a
+                // record. Ramping from the playing speed let it run on for
+                // about 60 ms.
                 engine.scratchEnable(
                     deck + 1,
                     PioneerDDJSX.scratchSettings.jogResolution,
                     PioneerDDJSX.scratchSettings.vinylSpeed,
                     PioneerDDJSX.scratchSettings.alpha,
                     PioneerDDJSX.scratchSettings.beta,
-                    true
+                    false
                 );
             }
         } else if (engine.isScratching(deck + 1)) {

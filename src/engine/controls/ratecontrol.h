@@ -93,6 +93,7 @@ public slots:
 
 private:
   void processTempRate(const int bufferSamples);
+  void updateJogFilterLength(const int bufferSamples);
   double getJogFactor() const;
   double getWheelFactor() const;
   SyncMode getSyncMode() const;
@@ -142,6 +143,8 @@ private:
 
   std::unique_ptr<ControlObject> m_pJog;
   std::unique_ptr<Rotary> m_pJogFilter;
+  // Buffer size (in samples) the jog filter length was computed for.
+  int m_jogFilterBufferSamples;
 
   ControlObject* m_pVCEnabled;
   ControlObject* m_pVCScratching;
