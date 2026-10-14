@@ -247,6 +247,44 @@ TEST_F(TransientWsolaTest, SpeedUpKeepsEveryDrumHitIntact) {
     }
 }
 
+TEST_F(TransientWsolaTest, PlacesDrumHitsOnTime) {
+    // Sparse hits over a sustained bed are where timing errors are audible.
+    for (const double tempo : {0.84, 0.92, 1.08, 1.16}) {
+        SCOPED_TRACE(tempo);
+        std::vector<SINT> clicks;
+        const std::vector<CSAMPLE> input = makeClickTrain(8 * 44100, 21336, &clicks);
+        TransientWsola stretch(44100);
+        stretch.setTempo(tempo);
+        const std::vector<CSAMPLE> output = stretchAll(&stretch, input);
+        double sum = 0;
+        int count = 0;
+        for (SINT click : clicks) {
+            // The burst start is the first loud sample near its nominal time.
+            const SINT nominal = static_cast<SINT>(std::lround(click / tempo));
+            const SINT from = nominal - 1323;
+            if (from < 0 || 2 * (nominal + 1323) >= static_cast<SINT>(output.size())) {
+                continue;
+            }
+            SINT found = -1;
+            for (SINT i = from; i < nominal + 1323; ++i) {
+                if (std::fabs(output[2 * i]) > 0.5f) {
+                    found = i;
+                    break;
+                }
+            }
+            ASSERT_GE(found, 0) << "burst at " << click;
+            const SINT error = found - nominal;
+            // 4 ms: the sync join's search window plus the burst's rise.
+            EXPECT_LE(std::abs(error), 176) << "burst at " << click;
+            sum += error;
+            ++count;
+        }
+        ASSERT_GT(count, 10);
+        EXPECT_LE(std::fabs(sum / count), 88.0); // No systematic offset (2 ms).
+        EXPECT_GT(stretch.stats().syncedOnsets, 0);
+    }
+}
+
 class EngineBufferScaleTransientTest : public MixxxTest {
 };
 

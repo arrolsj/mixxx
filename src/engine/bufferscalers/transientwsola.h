@@ -45,6 +45,8 @@ class TransientWsola {
         int64_t deferredJoins = 0;
         int64_t forcedJoins = 0;
         int64_t onsets = 0;
+        int64_t syncedOnsets = 0;
+        int64_t unsyncedOnsets = 0;
     };
     const Stats& stats() const {
         return m_stats;
@@ -63,7 +65,10 @@ class TransientWsola {
     }
     void analyzeHop(double energy);
     bool touchesOnset(int64_t a, int64_t b) const;
-    double score(int64_t q, int64_t target) const;
+    int64_t nextOnsetAfter(int64_t pos) const;
+    int64_t onsetBefore(int64_t pos) const;
+    int64_t findJoin(int64_t qLo, int64_t qHi, int64_t target, bool force) const;
+    double score(int64_t q, int64_t target, int64_t halfWidth) const;
     bool stretch();
     void compactInput();
     void pushStretched(const CSAMPLE* pFrame);
@@ -79,6 +84,9 @@ class TransientWsola {
     const int64_t m_postGuard;
     const int64_t m_maxDefer;
     const int64_t m_onsetSpacing;
+    const int64_t m_syncSeek;
+    const int64_t m_syncMargin;
+    const int64_t m_syncLead;
     const double m_energyFloor;
     std::vector<float> m_fade;
 
@@ -107,6 +115,11 @@ class TransientWsola {
     int64_t m_cur;
     double m_target;
     int64_t m_deferred;
+    // Onset the next join must place on time, and the last one handled.
+    int64_t m_syncOnset;
+    int64_t m_lastSyncedOnset;
+    // Input position up to which a placed onset is copied unchanged.
+    int64_t m_holdUntil;
 
     // Stretched audio waiting for resampling.
     std::vector<CSAMPLE> m_mid;

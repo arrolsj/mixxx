@@ -15,6 +15,14 @@ constexpr double kPostGuardMs = 12;
 // Longest stretch of unmodified audio while waiting for a safe join.
 constexpr double kMaxDeferMs = 90;
 constexpr double kOnsetSpacingMs = 30;
+// Joins placed just before an onset only search this close to the nominal
+// position, so the onset itself plays on time.
+constexpr double kSyncSeekMs = 2;
+constexpr double kSyncMarginMs = 1;
+// The timing correction for an onset is made as early as possible, in the
+// decay of the previous one, but at most this long before the onset. Making
+// it right before the onset would shorten the gap in front of the attack.
+constexpr double kSyncLeadMs = 40;
 // High-frequency energy rise against the preceding ~4-19 ms (6 dB).
 constexpr double kOnsetRatio = 4.0;
 constexpr double kOnsetFloorDb = -55;
@@ -39,6 +47,9 @@ TransientWsola::TransientWsola(int sampleRate)
           m_postGuard(msToFrames(kPostGuardMs, sampleRate)),
           m_maxDefer(msToFrames(kMaxDeferMs, sampleRate)),
           m_onsetSpacing(msToFrames(kOnsetSpacingMs, sampleRate)),
+          m_syncSeek(msToFrames(kSyncSeekMs, sampleRate)),
+          m_syncMargin(msToFrames(kSyncMarginMs, sampleRate)),
+          m_syncLead(msToFrames(kSyncLeadMs, sampleRate)),
           m_energyFloor(std::pow(10.0, kOnsetFloorDb / 10.0) * kHop),
           m_fade(static_cast<size_t>(m_overlap)),
           m_tempo(1.0),
@@ -74,6 +85,9 @@ void TransientWsola::clear() {
     m_cur = 0;
     m_target = 0;
     m_deferred = 0;
+    m_syncOnset = -1;
+    m_lastSyncedOnset = -1;
+    m_holdUntil = 0;
     m_midRead = 0;
     m_midWrite = 0;
     m_resamplePos = 0;
@@ -141,7 +155,69 @@ bool TransientWsola::touchesOnset(int64_t a, int64_t b) const {
     return false;
 }
 
-double TransientWsola::score(int64_t q, int64_t target) const {
+int64_t TransientWsola::nextOnsetAfter(int64_t pos) const {
+    int64_t next = -1;
+    for (int i = 0; i < m_onsetCount; ++i) {
+        const int64_t onset = m_onsets[(m_onsetHead - 1 - i + kMaxOnsets) % kMaxOnsets];
+        if (onset <= pos) {
+            break;
+        }
+        next = onset;
+    }
+    return next;
+}
+
+int64_t TransientWsola::onsetBefore(int64_t pos) const {
+    for (int i = 0; i < m_onsetCount; ++i) {
+        const int64_t onset = m_onsets[(m_onsetHead - 1 - i + kMaxOnsets) % kMaxOnsets];
+        if (onset < pos) {
+            return onset;
+        }
+    }
+    return -1;
+}
+
+int64_t TransientWsola::findJoin(int64_t qLo, int64_t qHi, int64_t target, bool force) const {
+    // Prefer the middle of the requested window, before clamping it.
+    const int64_t halfWidth = std::max<int64_t>((qHi - qLo) / 2, 1);
+    // Candidates must lie in buffered input, including their crossfade.
+    qLo = std::max(qLo, m_base);
+    qHi = std::min(qHi, inEnd() - m_overlap);
+    const auto acceptable = [&](int64_t q) {
+        // Joining in place is seamless.
+        return force || q == m_cur ||
+                !touchesOnset(std::min(m_cur, q), std::max(m_cur, q) + m_overlap);
+    };
+    const int64_t step = qHi - qLo > 16 ? 4 : 1;
+    int64_t best = -1;
+    double bestScore = 0;
+    for (int64_t q = qLo; q <= qHi; q += step) {
+        if (!acceptable(q)) {
+            continue;
+        }
+        const double s = score(q, target, halfWidth);
+        if (best < 0 || s > bestScore) {
+            best = q;
+            bestScore = s;
+        }
+    }
+    if (best >= 0 && step > 1) {
+        const int64_t coarse = best;
+        for (int64_t q = std::max(qLo, coarse - 3); q <= std::min(qHi, coarse + 3); ++q) {
+            if (q == coarse || !acceptable(q)) {
+                continue;
+            }
+            const double s = score(q, target, halfWidth);
+            if (s > bestScore) {
+                best = q;
+                bestScore = s;
+            }
+        }
+    }
+    return best;
+}
+
+double TransientWsola::score(int64_t q, int64_t target, int64_t halfWidth) const {
     double num = 0;
     double den = 1e-9;
     for (int64_t i = 0; i < m_overlap; i += 2) {
@@ -150,7 +226,7 @@ double TransientWsola::score(int64_t q, int64_t target) const {
         num += a * b;
         den += b * b;
     }
-    const double x = static_cast<double>(q - target) / m_seek;
+    const double x = static_cast<double>(q - target) / halfWidth;
     return num / std::sqrt(den) * (1.0 - kCenterWeight * x * x);
 }
 
@@ -162,7 +238,12 @@ void TransientWsola::pushStretched(const CSAMPLE* pFrame) {
 }
 
 bool TransientWsola::stretch() {
-    if (m_midWrite + std::max<int64_t>(m_body, m_overlap + kHop) > kStretchedCapacityFrames) {
+    // Longest body: copying through a placed onset, or extended up to a sync
+    // join that would otherwise come after the normal join.
+    const int64_t maxLength = m_body + m_overlap + 2 * m_seek + m_syncLead + m_postGuard;
+    // Largest single step.
+    const int64_t maxStep = maxLength + 2 * m_overlap + kHop;
+    if (m_midWrite + maxStep > kStretchedCapacityFrames) {
         if (m_midRead == 0) {
             return false; // Wait for the output to be read.
         }
@@ -170,18 +251,55 @@ bool TransientWsola::stretch() {
         std::memmove(m_mid.data(), m_mid.data() + 2 * m_midRead, 2 * remaining * sizeof(CSAMPLE));
         m_midRead = 0;
         m_midWrite = remaining;
-        if (m_midWrite + std::max<int64_t>(m_body, m_overlap + kHop) > kStretchedCapacityFrames) {
+        if (m_midWrite + maxStep > kStretchedCapacityFrames) {
             return false;
         }
     }
     if (m_inBody) {
-        if (m_cur + m_body > inEnd()) {
+        // Onset analysis must reach past this body and the following join.
+        if (m_cur + maxLength + m_overlap + m_seek + m_postGuard + kHop > inEnd()) {
             return false;
         }
-        for (int64_t i = 0; i < m_body; ++i) {
+        // Copy a placed onset unchanged until its attack has passed.
+        int64_t length = std::min(std::max(m_body, m_holdUntil - m_cur), maxLength);
+        m_syncOnset = -1;
+        const int64_t onset = nextOnsetAfter(std::max(m_cur, m_holdUntil) + m_preGuard);
+        if (onset >= 0 && onset != m_lastSyncedOnset) {
+            // End the body with a join just before the onset. The new
+            // segment starts where the onset reaches its nominal output time
+            // (see the sync target in the join). Both the old and the new
+            // crossfade must end before the protected onset region.
+            const double limit = static_cast<double>(
+                    onset - m_preGuard - m_syncMargin - m_overlap);
+            // Sync target q = x - (x - t_j) / tempo with the nominal input
+            // position t_j = m_target + tempo * (j - m_cur) at join j.
+            // q + syncSeek <= limit  <=>  j <= m_cur + (x - tempo * (x -
+            // limit + syncSeek) - m_target) / tempo.
+            const double x = static_cast<double>(onset);
+            const auto latest = static_cast<int64_t>(std::floor(std::min(limit,
+                    m_cur + (x - m_tempo * (x - limit + m_syncSeek) - m_target) / m_tempo)));
+            // Join as early as allowed: after the previous onset's attack and
+            // any held region, within the lead time before this onset.
+            int64_t earliest = std::max({m_cur,
+                    m_holdUntil,
+                    static_cast<int64_t>(std::ceil(limit)) - m_syncLead});
+            const int64_t previous = onsetBefore(onset);
+            if (previous >= 0) {
+                earliest = std::max(earliest, previous + m_postGuard);
+            }
+            const int64_t join = std::min(earliest, latest);
+            if (latest < m_cur) {
+                m_lastSyncedOnset = onset; // Too late to place it.
+                ++m_stats.unsyncedOnsets;
+            } else if (join <= m_cur + maxLength) {
+                length = join - m_cur;
+                m_syncOnset = onset;
+            }
+        }
+        for (int64_t i = 0; i < length; ++i) {
             pushStretched(&m_in[static_cast<size_t>(2 * (m_cur + i - m_base))]);
         }
-        m_cur += m_body;
+        m_cur += length;
         m_deferred = 0;
         m_inBody = false;
         return true;
@@ -191,39 +309,35 @@ bool TransientWsola::stretch() {
     const auto target = static_cast<int64_t>(std::llround(m_target));
     const int64_t qLo = std::max(target - m_seek, m_base);
     const int64_t qHi = target + m_seek;
-    if (std::max(qHi, m_cur) + m_overlap + m_postGuard + kHop > inEnd()) {
+    int64_t syncTarget = -1;
+    if (m_syncOnset >= 0) {
+        // After the join the input is copied 1:1, so start the new segment
+        // where the onset will reach its nominal output time.
+        const double onset = static_cast<double>(m_syncOnset);
+        syncTarget = static_cast<int64_t>(std::llround(onset - (onset - m_target) / m_tempo));
+    }
+    if (std::max({qHi, m_cur, syncTarget + m_syncSeek}) + m_overlap + m_postGuard + kHop >
+            inEnd()) {
         return false; // Need input and onset analysis beyond the join.
     }
     const bool force = m_deferred >= m_maxDefer;
-    const auto acceptable = [&](int64_t q) {
-        // Joining in place is seamless.
-        return force || q == m_cur ||
-                !touchesOnset(std::min(m_cur, q), std::max(m_cur, q) + m_overlap);
-    };
     int64_t best = -1;
-    double bestScore = 0;
-    for (int64_t q = qLo; q <= qHi; q += 4) {
-        if (!acceptable(q)) {
-            continue;
+    if (m_syncOnset >= 0) {
+        best = findJoin(std::max(syncTarget - m_syncSeek, m_base),
+                syncTarget + m_syncSeek,
+                syncTarget,
+                force);
+        if (best >= 0) {
+            m_lastSyncedOnset = m_syncOnset;
+            m_holdUntil = m_syncOnset + m_postGuard;
+            ++m_stats.syncedOnsets;
+        } else {
+            ++m_stats.unsyncedOnsets;
         }
-        const double s = score(q, target);
-        if (best < 0 || s > bestScore) {
-            best = q;
-            bestScore = s;
-        }
+        m_syncOnset = -1;
     }
-    if (best >= 0) {
-        const int64_t coarse = best;
-        for (int64_t q = std::max(qLo, coarse - 3); q <= std::min(qHi, coarse + 3); ++q) {
-            if (q == coarse || !acceptable(q)) {
-                continue;
-            }
-            const double s = score(q, target);
-            if (s > bestScore) {
-                best = q;
-                bestScore = s;
-            }
-        }
+    if (best < 0) {
+        best = findJoin(qLo, qHi, target, force);
     }
     if (std::llabs(m_cur - target) <= 1 && m_cur >= qLo) {
         best = m_cur; // Unity tempo: continue unchanged.
