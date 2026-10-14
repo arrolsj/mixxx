@@ -125,6 +125,7 @@ PioneerDDJSX.jogReleaseQuietElapsed = [0, 0, 0, 0];
 PioneerDDJSX.jogReleaseElapsed = [0, 0, 0, 0];
 PioneerDDJSX.jogLastDirection = [0, 0, 0, 0];
 PioneerDDJSX.jogWasPlaying = [false, false, false, false];
+PioneerDDJSX.jogTouched = [false, false, false, false];
 PioneerDDJSX.wheelLedsBlinkStatus = [0, 0, 0, 0];
 PioneerDDJSX.wheelLedsPosition = [0, 0, 0, 0];
 PioneerDDJSX.tempoRanges = [0.08, 0.16, 0.32, 1.00];
@@ -1024,9 +1025,12 @@ PioneerDDJSX.shiftButton = function(channel, control, value, status, group) {
 PioneerDDJSX.playButton = function(channel, control, value, status, group) {
     if (value) {
         var deck = PioneerDDJSX.channelGroups ? PioneerDDJSX.channelGroups[group] : undefined;
-        if (engine.getValue(group, "scratch2_enable") > 0) {
-            // PLAY is an explicit transport command. A missing platter-touch
-            // release must not leave scratch mode owning the transport forever.
+        var platterHeld = typeof deck === "number" && PioneerDDJSX.jogTouched[deck];
+        if (!platterHeld && engine.getValue(group, "scratch2_enable") > 0) {
+            // PLAY is an explicit transport command. A scratch session that
+            // outlived the touch must not own the transport forever. While the
+            // platter is still held, PLAY only arms playback so the deck starts
+            // when the DJ lets go.
             engine.setValue(group, "scratch2_enable", 0);
             if (typeof deck === "number") {
                 PioneerDDJSX.cancelJogRelease(deck);
@@ -2320,6 +2324,7 @@ PioneerDDJSX.jogPlatterTickShift = function(channel, control, value, status, gro
 PioneerDDJSX.jogTouch = function(channel, control, value, status, group) {
     var deck = PioneerDDJSX.channelGroups[group];
 
+    PioneerDDJSX.jogTouched[deck] = value > 0;
     if (PioneerDDJSX.scratchMode[deck]) {
         if (value) {
             PioneerDDJSX.cancelJogRelease(deck);
