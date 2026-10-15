@@ -292,7 +292,9 @@ TEST(ColorFxEffectTest, FlangerFullEngineChainPreservesWetSignalAtUnityMix) {
         const QString group = QStringLiteral("[Channel1]");
         const auto handle = handles.getOrCreateHandle(group);
         const QSet<ChannelHandleAndGroup> channels{ChannelHandleAndGroup(handle, group)};
-        const auto manifest = FlangerEffect::getManifest();
+        const auto manifest = backend->getManifest(
+                FlangerEffect::getManifest()->id(), EffectBackendType::BuiltIn);
+        ASSERT_TRUE(manifest);
         EngineEffect effect(manifest, backend, channels, channels, channels);
         EngineEffectChain chain(QStringLiteral("[EffectRack1_EffectUnit1]"), channels, channels);
         auto pipes = TwoWayMessagePipe<EffectsRequest*, EffectsResponse>::makeTwoWayMessagePipe(32, 32);
