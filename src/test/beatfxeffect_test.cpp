@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "control/controlobject.h"
 #include "effects/backends/builtin/beatfxeffect.h"
 #include "effects/backends/builtin/colorcrusheffect.h"
 #include "effects/backends/effectsbackendmanager.h"
@@ -23,7 +24,8 @@ struct Harness {
     Harness(int rate = 48000, int frames = 257)
             : engine(mixxx::audio::SampleRate(rate), frames), state(engine),
               input(engine.samplesPerBuffer()), output(engine.samplesPerBuffer()) {
-        for (const auto& p : Effect::getManifest()->parameters()) {
+        const auto manifest = Effect::getManifest();
+        for (const auto& p : manifest->parameters()) {
             parameters.insert(p->id(), EngineEffectParameterPointer(new EngineEffectParameter(p)));
         }
         effect.loadEngineEffectParameters(parameters);
@@ -241,7 +243,7 @@ TEST(BeatFxEffectTest, CrushSampleHoldIsStereoAndFiniteAcrossColorSweep) {
         int repeated = 0;
         for (int b = 0; b < 50; ++b) {
             for (int f = 0; f < 257; ++f) {
-                h.input[2 * f] = .1f * std::sin((b * 257 + f) * .017);
+                h.input[2 * f] = static_cast<float>(.1 * std::sin((b * 257 + f) * .017));
                 h.input[2 * f + 1] = -h.input[2 * f];
             }
             h.process();
@@ -253,7 +255,9 @@ TEST(BeatFxEffectTest, CrushSampleHoldIsStereoAndFiniteAcrossColorSweep) {
                 previous = h.output[2 * f];
             }
         }
-        if (color == 0) EXPECT_GT(repeated, 10000);
+        if (color == 0) {
+            EXPECT_GT(repeated, 10000);
+        }
     }
 }
 
