@@ -141,7 +141,7 @@ TEST(RekordboxBeatGridTest, BeatBeforeTrackStartStillFitsConstantGrid) {
                 26,
                 14000));
     }
-    EXPECT_DOUBLE_EQ(-kSampleRate.value() / 1000.0, grid.first().position.value());
+    EXPECT_DOUBLE_EQ(-(kSampleRate.value() / 1000.0), grid.first().position.value());
     const auto beats = beatsFromGrid(kSampleRate, grid, 4, QString());
     ASSERT_TRUE(beats);
     EXPECT_TRUE(beats->getMarkers().empty());
@@ -154,8 +154,10 @@ TEST(RekordboxBeatGridTest, BeatMapKeepsBeatsBeforeTrackStartAtOneMillisecond) {
     grid[4].tempo = 0;
     const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
     ASSERT_TRUE(beats);
-    EXPECT_DOUBLE_EQ(kSampleRate.value() / 1000.0,
-            beats->findClosestBeat(audio::kStartFramePos).value());
+    // The beat map stores whole frames.
+    EXPECT_NEAR(kSampleRate.value() / 1000.0,
+            beats->findClosestBeat(audio::kStartFramePos).value(),
+            1.0);
 }
 
 TEST(RekordboxBeatGridTest, MissingTempoKeepsExportedPositions) {
