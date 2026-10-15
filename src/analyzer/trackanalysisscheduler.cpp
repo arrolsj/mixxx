@@ -328,7 +328,7 @@ bool TrackAnalysisScheduler::submitNextTrack(Worker* worker) {
             if (nextTrackPtr) {
                 AnalyzerTrack nextTrack(nextTrackPtr, nextScheduledTrack.getOptions());
                 if (m_pendingTrackIds.insert(nextTrackId).second) {
-                    if (worker->submitNextTrack(std::move(nextTrack))) {
+                    if (worker->submitNextTrack(std::move(nextTrack), nextTrackId)) {
                         m_queuedTracks.pop_front();
                         ++m_dequeuedTracksCount;
                         return true;

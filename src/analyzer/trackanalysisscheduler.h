@@ -119,9 +119,8 @@ class TrackAnalysisScheduler : public QObject {
             return m_analyzerProgress;
         }
 
-        bool submitNextTrack(const AnalyzerTrack& track) {
+        bool submitNextTrack(const AnalyzerTrack& track, TrackId trackId) {
             DEBUG_ASSERT(m_pThread);
-            const TrackId trackId = track.getTrack()->getId();
             if (m_cancelledTrackId == trackId) {
                 // The track has been loaded again after it was abandoned.
                 // Its previous analysis has finished, because tracks are
