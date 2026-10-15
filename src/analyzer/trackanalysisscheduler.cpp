@@ -224,6 +224,7 @@ void TrackAnalysisScheduler::onWorkerThreadProgress(
             worker.onAnalyzerProgress(analyzerProgress);
             emit trackProgress(trackId, analyzerProgress);
         }
+        worker.onTrackDone(trackId);
         break;
     case AnalyzerThreadState::Exit:
         DEBUG_ASSERT(!trackId.isValid());
@@ -260,6 +261,45 @@ int TrackAnalysisScheduler::scheduleTracks(const QList<AnalyzerScheduledTrack>& 
         }
     }
     return scheduledCount;
+}
+
+void TrackAnalysisScheduler::prioritizeLoadedTracks(
+        TrackId priorityTrackId,
+        const QList<TrackId>& loadedTrackIds) {
+    std::deque<AnalyzerScheduledTrack> queuedTracks;
+    std::optional<AnalyzerScheduledTrack> priorityTrack;
+    for (const auto& track : m_queuedTracks) {
+        const TrackId trackId = track.getTrackId();
+        if (trackId == priorityTrackId) {
+            if (!priorityTrack) {
+                priorityTrack = track;
+                continue;
+            }
+        } else if (loadedTrackIds.contains(trackId)) {
+            queuedTracks.push_back(track);
+            continue;
+        } else {
+            kLogger.debug()
+                    << "Dropping queued analysis of unloaded track"
+                    << trackId;
+        }
+        // Account dropped tracks like skipped tracks in submitNextTrack()
+        ++m_dequeuedTracksCount;
+    }
+    if (priorityTrack) {
+        queuedTracks.push_front(*priorityTrack);
+    }
+    m_queuedTracks = std::move(queuedTracks);
+
+    for (auto& worker : m_workers) {
+        const TrackId trackId = worker.submittedTrackId();
+        if (trackId.isValid() && !loadedTrackIds.contains(trackId)) {
+            kLogger.debug()
+                    << "Abandoning analysis of unloaded track"
+                    << trackId;
+            worker.cancelSubmittedTrack();
+        }
+    }
 }
 
 void TrackAnalysisScheduler::suspend() {

@@ -767,6 +767,20 @@ void PlayerManager::slotAnalyzeTrack(TrackPointer track) {
     }
     if (m_pTrackAnalysisScheduler) {
         if (m_pTrackAnalysisScheduler->scheduleTrack(track->getId())) {
+            // LastCUE Box: Analyze the newly loaded track next and stop
+            // spending the few analyzer threads on replaced tracks.
+            QList<TrackId> loadedTrackIds;
+            {
+                const auto locker = lockMutex(&m_mutex);
+                for (const auto* pPlayer : std::as_const(m_players)) {
+                    const TrackPointer pLoadedTrack = pPlayer->getLoadedTrack();
+                    if (pLoadedTrack) {
+                        loadedTrackIds.append(pLoadedTrack->getId());
+                    }
+                }
+            }
+            m_pTrackAnalysisScheduler->prioritizeLoadedTracks(
+                    track->getId(), loadedTrackIds);
             m_pTrackAnalysisScheduler->resume();
         }
         // The first progress signal will suspend a running batch analysis

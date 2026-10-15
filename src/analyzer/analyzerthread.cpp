@@ -82,6 +82,7 @@ AnalyzerThread::AnalyzerThread(
           m_pConfig(pConfig),
           m_modeFlags(modeFlags),
           m_nextTrack(2), // minimum capacity
+          m_cancelledTrackIdValue(TrackId().toVariant().toInt()),
           m_sampleBuffer(mixxx::kAnalysisSamplesPerChunk),
           m_emittedState(AnalyzerThreadState::Void) {
     std::call_once(registerMetaTypesOnceFlag, registerMetaTypesOnce);
@@ -166,6 +167,20 @@ void AnalyzerThread::doRun() {
                 }
                 emitDoneProgress(kAnalyzerProgressDone);
             } else {
+                if (!isStopping()) {
+                    const TrackPointer pTrack = m_currentTrack->getTrack();
+                    kLogger.debug()
+                            << "Abandoned analysis of unloaded track"
+                            << pTrack->getId();
+                    // Drop partially generated waveforms so that the track
+                    // is analyzed again when it is loaded the next time.
+                    const ConstWaveformPointer pWaveform = pTrack->getWaveform();
+                    if (pWaveform &&
+                            pWaveform->getCompletion() < pWaveform->getDataSize()) {
+                        pTrack->setWaveform(ConstWaveformPointer());
+                        pTrack->setWaveformSummary(ConstWaveformPointer());
+                    }
+                }
                 for (auto&& analyzer : m_analyzers) {
                     analyzer.cancel();
                 }
@@ -198,6 +213,17 @@ bool AnalyzerThread::submitNextTrack(const AnalyzerTrack& nextTrack) {
         return true;
     }
     return false;
+}
+
+void AnalyzerThread::cancelTrack(TrackId trackId) {
+    m_cancelledTrackIdValue.store(trackId.toVariant().toInt());
+}
+
+bool AnalyzerThread::isCurrentTrackCancelled() const {
+    DEBUG_ASSERT(m_currentTrack.has_value());
+    const TrackId trackId = m_currentTrack->getTrack()->getId();
+    return trackId.isValid() &&
+            m_cancelledTrackIdValue.load() == trackId.toVariant().toInt();
 }
 
 WorkerThread::TryFetchWorkItemsResult AnalyzerThread::tryFetchWorkItems() {
@@ -233,7 +259,7 @@ AnalyzerThread::AnalysisResult AnalyzerThread::analyzeAudioSource(
     mixxx::IndexRange remainingFrameRange = audioSource->frameIndexRange();
     while (!remainingFrameRange.empty()) {
         sleepWhileSuspended();
-        if (isStopping()) {
+        if (isStopping() || isCurrentTrackCancelled()) {
             return AnalysisResult::Cancelled;
         }
 
@@ -289,7 +315,7 @@ AnalyzerThread::AnalysisResult AnalyzerThread::analyzeAudioSource(
         }
 
         sleepWhileSuspended();
-        if (isStopping()) {
+        if (isStopping() || isCurrentTrackCancelled()) {
             return AnalysisResult::Cancelled;
         }
 

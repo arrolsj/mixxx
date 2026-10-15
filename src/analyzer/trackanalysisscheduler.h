@@ -3,6 +3,7 @@
 #include <QList>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -52,6 +53,14 @@ class TrackAnalysisScheduler : public QObject {
     // the caller must invoke resume() once.
     bool scheduleTrack(AnalyzerScheduledTrack track);
     int scheduleTracks(const QList<AnalyzerScheduledTrack>& tracks);
+
+    // LastCUE Box: Drops queued and abandons running analyses of tracks that
+    // are not contained in loadedTrackIds, and moves priorityTrackId to the
+    // front of the queue. Used for tracks loaded into players, so that a newly
+    // loaded track does not wait behind tracks that have been replaced.
+    void prioritizeLoadedTracks(
+            TrackId priorityTrackId,
+            const QList<TrackId>& loadedTrackIds);
 
   public slots:
     void suspend();
@@ -112,7 +121,36 @@ class TrackAnalysisScheduler : public QObject {
 
         bool submitNextTrack(const AnalyzerTrack& track) {
             DEBUG_ASSERT(m_pThread);
-            return m_pThread->submitNextTrack(std::move(track));
+            const TrackId trackId = track.getTrack()->getId();
+            if (m_cancelledTrackId == trackId) {
+                // The track has been loaded again after it was abandoned.
+                // Its previous analysis has finished, because tracks are
+                // only submitted again after the done signal.
+                m_pThread->cancelTrack(TrackId());
+                m_cancelledTrackId = TrackId();
+            }
+            if (!m_pThread->submitNextTrack(std::move(track))) {
+                return false;
+            }
+            m_submittedTrackId = trackId;
+            return true;
+        }
+
+        TrackId submittedTrackId() const {
+            return m_submittedTrackId;
+        }
+
+        void onTrackDone(TrackId trackId) {
+            if (m_submittedTrackId == trackId) {
+                m_submittedTrackId = TrackId();
+            }
+        }
+
+        void cancelSubmittedTrack() {
+            if (m_pThread && m_submittedTrackId.isValid()) {
+                m_pThread->cancelTrack(m_submittedTrackId);
+                m_cancelledTrackId = m_submittedTrackId;
+            }
         }
 
         void suspendThread() {
@@ -147,6 +185,8 @@ class TrackAnalysisScheduler : public QObject {
       private:
         AnalyzerThread::Pointer m_pThread;
         AnalyzerProgress m_analyzerProgress;
+        TrackId m_submittedTrackId;
+        TrackId m_cancelledTrackId;
     };
 
     bool submitNextTrack(Worker* worker);

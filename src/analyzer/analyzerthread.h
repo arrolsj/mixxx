@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -79,6 +80,12 @@ class AnalyzerThread : public WorkerThread {
     // worker thread, yet.
     bool submitNextTrack(const AnalyzerTrack& nextTrack);
 
+    // LastCUE Box: Abandons the analysis of the given track without saving
+    // partial results if the worker thread is currently analyzing it. An
+    // invalid id clears a previous request. Must be called from the host
+    // thread, which also submits the tracks.
+    void cancelTrack(TrackId trackId);
+
   signals:
     // Use a single signal for progress updates to ensure that all signals
     // are queued and received in the same order as emitted from the internal
@@ -112,6 +119,9 @@ class AnalyzerThread : public WorkerThread {
     // for this purpose, which will become available in C++20.
     rigtorp::SPSCQueue<AnalyzerTrack> m_nextTrack;
 
+    // Id value of the track whose analysis should be abandoned.
+    std::atomic<int> m_cancelledTrackIdValue;
+
     /////////////////////////////////////////////////////////////////////////
     // Thread local: Only used in the constructor/destructor and within
     // run() by the worker thread.
@@ -133,6 +143,8 @@ class AnalyzerThread : public WorkerThread {
     };
     AnalysisResult analyzeAudioSource(
             const mixxx::AudioSourcePointer& audioSource);
+
+    bool isCurrentTrackCancelled() const;
 
     // Blocks the worker thread until a next track becomes available
     TrackPointer receiveNextTrack();
