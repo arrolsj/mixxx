@@ -103,9 +103,8 @@ class TrackAnalysisSchedulerTest : public MixxxTest {
     TrackId addTrack(int id, int seconds) {
         const QString path = m_tempDir.filePath(QStringLiteral("noise-%1.wav").arg(id));
         EXPECT_TRUE(writeNoiseWav(path, seconds));
-        TrackPointer pTrack = Track::newTemporary(path);
-        const TrackId trackId(QVariant(id));
-        pTrack->initId(trackId);
+        const TrackId trackId{QVariant(id)};
+        TrackPointer pTrack = Track::newDummy(path, trackId);
         m_tracks.insert(id, pTrack);
         return trackId;
     }
