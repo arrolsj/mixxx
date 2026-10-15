@@ -76,7 +76,8 @@ EffectManifestPointer ColorDubEchoEffect::getManifest() {
     manifest->setAuthor("The LastCUE Box Team");
     manifest->setVersion("3.0");
     manifest->setDescription(QObject::tr("Dual filtered dub echo with a single Color control"));
-    manifest->setEffectRampsFromDry(true);
+    // The engine fades effect enable/disable; Color center only stops new sends.
+    manifest->setEffectRampsFromDry(false);
     manifest->setMetaknobDefault(kCenter);
     auto color = manifest->addParameter();
     color->setId("color");

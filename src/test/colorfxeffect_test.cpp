@@ -204,7 +204,9 @@ TEST(ColorFxEffectTest, DubEchoCenterRetainsTailAndIgnoresTempo) {
 }
 
 TEST(ColorFxEffectTest, DubEchoHasOnlyOneExternalParameter) {
-    const auto parameters = ColorDubEchoEffect::getManifest()->parameters();
+    const auto manifest = ColorDubEchoEffect::getManifest();
+    const auto parameters = manifest->parameters();
+    EXPECT_FALSE(manifest->effectRampsFromDry());
     ASSERT_EQ(parameters.size(), 1);
     EXPECT_EQ(parameters.first()->id(), QStringLiteral("color"));
 }
