@@ -156,10 +156,13 @@ void FlangerEffect::processChannel(
 
     // With and Manual is limited by amount of amplitude that remains from width
     // to kMaxDelayMs
-    double width = std::clamp(m_pWidthParameter->value(), 0.0, kMaxLfoWidthMs);
+    const double minimumDelay = 1000.0 / engineParameters.sampleRate();
+    const double maximumWidth = kMaxDelayMs - minimumDelay;
+    const double centerDelay = (kMaxDelayMs + minimumDelay) / 2;
+    double width = std::clamp(m_pWidthParameter->value(), 0.0, maximumWidth);
     double manual = m_pManualParameter->value();
-    double maxManual = kCenterDelayMs + (kMaxLfoWidthMs - width) / 2;
-    double minManual = kCenterDelayMs - (kMaxLfoWidthMs - width) / 2;
+    double maxManual = centerDelay + (maximumWidth - width) / 2;
+    double minManual = centerDelay - (maximumWidth - width) / 2;
     manual = math_clamp(manual, minManual, maxManual);
 
     const int smoothFrames = std::max(1, static_cast<int>(0.05 * engineParameters.sampleRate()));
@@ -186,11 +189,15 @@ void FlangerEffect::processChannel(
         CSAMPLE_GAIN regen_ramped = regenRamped.getNth(rampIndex);
         if (pState->widthRemaining > 0) {
             pState->prev_width += pState->widthStep;
-            if (--pState->widthRemaining == 0) pState->prev_width = pState->targetWidth;
+            if (--pState->widthRemaining == 0) {
+                pState->prev_width = static_cast<CSAMPLE_GAIN>(pState->targetWidth);
+            }
         }
         if (pState->manualRemaining > 0) {
             pState->prev_manual += pState->manualStep;
-            if (--pState->manualRemaining == 0) pState->prev_manual = pState->targetManual;
+            if (--pState->manualRemaining == 0) {
+                pState->prev_manual = static_cast<CSAMPLE_GAIN>(pState->targetManual);
+            }
         }
         const double width_ramped = pState->prev_width;
         const double manual_ramped = pState->prev_manual;
@@ -200,7 +207,7 @@ void FlangerEffect::processChannel(
         const double triangle = (pState->lfoFrames < halfPeriod ? pState->lfoFrames :
                 lfoPeriodFrames - pState->lfoFrames) * (4.0 / lfoPeriodFrames) - 1.0;
         const double delayMs = std::clamp(manual_ramped + width_ramped / 2 * triangle,
-                1000.0 / engineParameters.sampleRate(), kMaxDelayMs);
+                minimumDelay, kMaxDelayMs);
         double delayFrames = delayMs * engineParameters.sampleRate() / 1000;
 
         SINT framePrev =

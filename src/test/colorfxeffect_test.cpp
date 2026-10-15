@@ -223,7 +223,9 @@ TEST(ColorFxEffectTest, FlangerLinearFeedbackAndFractionalDelay) {
         const double frac = manual * 48 - 48;
         EXPECT_NEAR(harness.output()[48 * 2], 1.5 * (1 - frac), 1e-5);
         EXPECT_NEAR(harness.output()[49 * 2], 1.5 * frac, 1e-5);
-        if (manual == 1.0) EXPECT_NEAR(harness.output()[96 * 2], 1.5 * 0.266666591, 1e-5);
+        if (manual == 1.0) {
+            EXPECT_NEAR(harness.output()[96 * 2], 1.5 * 0.266666591, 1e-5);
+        }
         for (int i = 1; i < harness.samplesPerBuffer(); i += 2) ASSERT_EQ(harness.output()[i], 0);
     }
 }
@@ -243,3 +245,48 @@ TEST(ColorFxEffectTest, FlangerDryAndDisableReset) {
 }
 
 } // namespace
+
+TEST(FxModulationTest, DefaultSweepQuarterPointsAndFractionalBeatAtAllRates) {
+    for (int rate : {44100, 48000, 96000}) {
+        const mixxx::EngineParameters engine(mixxx::audio::SampleRate(rate), 257);
+        FlangerGroupState state(engine);
+        FlangerEffect effect;
+        QMap<QString, EngineEffectParameterPointer> parameters;
+        const auto manifest = FlangerEffect::getManifest();
+        for (const auto& p : manifest->parameters()) {
+            parameters.insert(p->id(), EngineEffectParameterPointer(new EngineEffectParameter(p)));
+        }
+        parameters.value("speed")->setValue(.75);
+        parameters.value("regen")->setValue(0);
+        parameters.value("mix")->setValue(1);
+        effect.loadEngineEffectParameters(parameters);
+        GroupFeatureState features;
+        features.beat_length = GroupFeatureBeatLength{.5, 1.0};
+        mixxx::SampleBuffer input(engine.samplesPerBuffer()), output(engine.samplesPerBuffer());
+        const int period = static_cast<int>(rate * .375);
+        const double maxDelay = 2.6666667461395264 * rate / 1000;
+        // Standard triangle: these points are 1/4, 3/4, 3/4, 1/4 through its delay range.
+        const double fractions[] = {.25, .75, .75, .25};
+        int checks = 0;
+        for (int start = 0; start < 2 * period; start += 257) {
+            for (int frame = 0; frame < 257; ++frame) {
+                input[2 * frame] = (start + frame) * 1e-6f;
+                input[2 * frame + 1] = 0;
+            }
+            effect.processChannel(&state, input.data(), output.data(), engine,
+                    EffectEnableState::Enabled, features);
+            for (int point = 0; point < 4; ++point) {
+                const int n = period + (2 * point + 1) * period / 8;
+                if (start <= n && n < start + 257) {
+                    const double inferredDelay = n -
+                            (output[2 * (n - start)] / .75 - input[2 * (n - start)]) / 1e-6;
+                    const double expectedDelay = 1 + fractions[point] * (maxDelay - 1);
+                    EXPECT_NEAR(inferredDelay, expectedDelay, .12) << "rate=" << rate << " point=" << point;
+                    EXPECT_EQ(output[2 * (n - start) + 1], 0);
+                    ++checks;
+                }
+            }
+        }
+        EXPECT_EQ(checks, 4);
+    }
+}

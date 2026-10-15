@@ -16,9 +16,9 @@ void setBranch(ColorDubEchoGroupState::Branch* branch,
         double distance, bool left, double sampleRate, int rampFrames) {
     branch->requestedDelayFrames = (55.0 + std::max(0.0, distance - 0.2) *
             (left ? 167.5 : 118.75)) * sampleRate / 1000.0;
-    branch->feedback = left ? 0.87f + 0.1f * std::max(0.0, distance - 0.2)
-                           : (distance < 0.2 ? 0.88f : 0.88f + 0.1f * distance);
-    const float send = std::min(distance * (10.0 / 3.0), 1.0);
+    branch->feedback = static_cast<float>(left ? 0.87 + 0.1 * std::max(0.0, distance - 0.2)
+                           : (distance < 0.2 ? 0.88 : 0.88 + 0.1 * distance));
+    const float send = static_cast<float>(std::min(distance * (10.0 / 3.0), 1.0));
     if (send != branch->targetSend) {
         branch->targetSend = send;
         branch->sendStep = (send - branch->send) / rampFrames;
@@ -30,7 +30,7 @@ CSAMPLE readDelay(const ColorDubEchoGroupState::Branch& branch,
         int writeFrame, int channel, int channels, double delayFrames) {
     const int frames = branch.delay.size() / channels;
     const int whole = static_cast<int>(delayFrames);
-    const float fraction = delayFrames - whole;
+    const float fraction = static_cast<float>(delayFrames - whole);
     const int recent = (writeFrame + frames - whole) % frames;
     const int older = (recent + frames - 1) % frames;
     const CSAMPLE a = branch.delay[recent * channels + channel];
