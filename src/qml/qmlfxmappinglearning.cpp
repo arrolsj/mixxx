@@ -175,6 +175,12 @@ QmlFxMappingLearning::QmlFxMappingLearning(
     VERIFY_OR_DEBUG_ASSERT(m_pManager && m_pConfig) {
         return;
     }
+    for (int unit = 1; unit <= 2; ++unit) {
+        m_pUnitTimeAdjustControls[unit - 1] = std::make_unique<ControlPotmeter>(
+                controlKeyForTimeBinding(MidiOptions(), unit), 0.0, 1.0, false, false);
+        m_pUnitTimeDeltaControls[unit - 1] = std::make_unique<ControlEncoder>(
+                controlKeyForTimeBinding(MidiOptions(MidiOption::SelectKnob), unit), false);
+    }
     m_captureTimer.setInterval(250);
     m_captureTimer.setSingleShot(true);
     connect(&m_captureTimer,
@@ -254,7 +260,7 @@ QStringList QmlFxMappingLearning::singleSelectedActionIds() {
 
 QStringList QmlFxMappingLearning::group3ActionIds() {
     QStringList result;
-    result.reserve(13);
+    result.reserve(14);
     for (int deck = 1; deck <= 2; ++deck) {
         for (int slot = 1; slot <= 3; ++slot) {
             const auto prefix = QStringLiteral("lastcue.fx.group.deck%1.slot%2.")
@@ -264,7 +270,8 @@ QStringList QmlFxMappingLearning::group3ActionIds() {
             result.append(prefix + QStringLiteral("adjust"));
         }
     }
-    result.append(QStringLiteral("lastcue.fx.time_adjust"));
+    result.append(QStringLiteral("lastcue.fx.group.deck1.time_adjust"));
+    result.append(QStringLiteral("lastcue.fx.group.deck2.time_adjust"));
     return result;
 }
 
@@ -277,6 +284,11 @@ ConfigKey QmlFxMappingLearning::controlKeyForAction(const QString& actionId) {
     for (const auto& action : kSingleSelectedActionControls) {
         if (action.first == actionId) {
             return ConfigKey(kFxControlGroup, action.second);
+        }
+    }
+    for (int unit = 1; unit <= 2; ++unit) {
+        if (actionId == QStringLiteral("lastcue.fx.group.deck%1.time_adjust").arg(unit)) {
+            return controlKeyForTimeBinding(MidiOptions(), unit);
         }
     }
 
@@ -308,6 +320,12 @@ QString QmlFxMappingLearning::actionIdForControlKey(const ConfigKey& key) {
     }
     if (key == ConfigKey(kFxControlGroup, kTimeDeltaControl)) {
         return QStringLiteral("lastcue.fx.time_adjust");
+    }
+    for (int unit = 1; unit <= 2; ++unit) {
+        if (key == controlKeyForTimeBinding(MidiOptions(), unit) ||
+                key == controlKeyForTimeBinding(MidiOptions(MidiOption::SelectKnob), unit)) {
+            return QStringLiteral("lastcue.fx.group.deck%1.time_adjust").arg(unit);
+        }
     }
 
     static const QRegularExpression groupPattern(
@@ -397,7 +415,7 @@ QString QmlFxMappingLearning::actionIdForMapping(
         if (pKey->item == dryWetKey &&
                 mapping.key.status == controlStatus &&
                 mapping.key.control == 0x00) {
-            return QStringLiteral("lastcue.fx.time_adjust");
+            return QStringLiteral("lastcue.fx.group.deck%1.time_adjust").arg(unit);
         }
     }
     int deck = 0;
@@ -436,9 +454,12 @@ QString QmlFxMappingLearning::actionIdForMapping(
     return {};
 }
 
-ConfigKey QmlFxMappingLearning::controlKeyForTimeBinding(MidiOptions options) {
-    return ConfigKey(kFxControlGroup,
-            isRelativeOptions(options) ? kTimeDeltaControl : kTimeAdjustControl);
+ConfigKey QmlFxMappingLearning::controlKeyForTimeBinding(MidiOptions options, int unitNumber) {
+    QString key = isRelativeOptions(options) ? kTimeDeltaControl : kTimeAdjustControl;
+    if (unitNumber == 1 || unitNumber == 2) {
+        key += QStringLiteral("_unit%1").arg(unitNumber);
+    }
+    return ConfigKey(kFxControlGroup, key);
 }
 
 QString QmlFxMappingLearning::behaviorKindForOptions(MidiOptions options) {
@@ -1190,9 +1211,16 @@ void QmlFxMappingLearning::finishCandidateCapture() {
         m_capturedMessages.clear();
         return;
     }
-    if (currentActionId() == QStringLiteral("lastcue.fx.time_adjust")) {
+    if (currentActionId().endsWith(QStringLiteral(".time_adjust"))) {
+        int unit = 0;
+        for (int candidate = 1; candidate <= 2; ++candidate) {
+            if (currentActionId() ==
+                    QStringLiteral("lastcue.fx.group.deck%1.time_adjust").arg(candidate)) {
+                unit = candidate;
+            }
+        }
         for (auto& mapping : m_candidateMappings) {
-            mapping.control = controlKeyForTimeBinding(mapping.options);
+            mapping.control = controlKeyForTimeBinding(mapping.options, unit);
         }
     }
 

@@ -56,6 +56,7 @@ ColorDubEchoGroupState::ColorDubEchoGroupState(const mixxx::EngineParameters& pa
     leftPre->assumeSettled();
     rightPre->assumeSettled();
     rightPost->assumeSettled();
+    outputGainRemaining = std::max(1, static_cast<int>(parameters.sampleRate() * 0.0033));
     for (auto& branch : branches) {
         branch.delayFrames = branch.nextDelayFrames = branch.requestedDelayFrames =
                 parameters.sampleRate() * 0.055;
@@ -74,7 +75,7 @@ EffectManifestPointer ColorDubEchoEffect::getManifest() {
     manifest->setName(QObject::tr("Color Dub Echo"));
     manifest->setShortName(QObject::tr("Color Dub Echo"));
     manifest->setAuthor("The LastCUE Box Team");
-    manifest->setVersion("3.0");
+    manifest->setVersion("3.1");
     manifest->setDescription(QObject::tr("Dual filtered dub echo with a single Color control"));
     // The engine fades effect enable/disable; Color center only stops new sends.
     manifest->setEffectRampsFromDry(false);
@@ -149,9 +150,21 @@ void ColorDubEchoEffect::processChannel(ColorDubEchoGroupState* state,
     auto& left = state->branches[0].work;
     auto& right = state->branches[1].work;
     state->rightPost->process(right.data(), right.data(), parameters.samplesPerBuffer());
-    for (int i = 0; i < parameters.samplesPerBuffer(); ++i) {
-        // Default branch gain is 0.7; the wrapper attenuates the left branch again.
-        output[i] = input[i] + 0.49f * left[i] + 0.7f * right[i];
+    for (int frame = 0; frame < parameters.framesPerBuffer(); ++frame) {
+        if (state->outputGainRemaining > 0) {
+            state->outputGain += (state->outputGainFadingOut ? -0.7f : 1.0f) / rampFrames;
+            if (--state->outputGainRemaining == 0) {
+                state->outputGain = state->outputGainFadingOut ? 0.0f : 1.0f;
+                if (state->outputGainFadingOut) {
+                    state->outputGainFadingOut = false;
+                    state->outputGainRemaining = rampFrames;
+                }
+            }
+        }
+        for (int channel = 0; channel < channels; ++channel) {
+            const int i = frame * channels + channel;
+            output[i] = input[i] + state->outputGain * (0.7f * left[i] + right[i]);
+        }
     }
     if (enableState == EffectEnableState::Disabling) {
         for (auto& branch : state->branches) {

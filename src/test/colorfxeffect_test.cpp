@@ -7,6 +7,9 @@
 #include "effects/backends/builtin/colornoiseeffect.h"
 #include "effects/backends/builtin/flangereffect.h"
 #include "effects/backends/effectmanifest.h"
+#include "effects/backends/effectsbackendmanager.h"
+#include "engine/effects/engineeffect.h"
+#include "engine/effects/engineeffectchain.h"
 #include "engine/effects/engineeffectparameter.h"
 #include "engine/effects/groupfeaturestate.h"
 #include "engine/engine.h"
@@ -46,6 +49,10 @@ class ColorFxHarness {
 
     const CSAMPLE* output() const {
         return m_output.data();
+    }
+
+    State& state() {
+        return m_state;
     }
 
     void setBeatLengthSeconds(double seconds) {
@@ -211,6 +218,37 @@ TEST(ColorFxEffectTest, DubEchoHasOnlyOneExternalParameter) {
     EXPECT_EQ(parameters.first()->id(), QStringLiteral("color"));
 }
 
+TEST(ColorFxEffectTest, DubEchoDefaultFilterGainReachesUnityAcrossBlockSizes) {
+    for (int rate : {44100, 48000, 96000}) {
+        for (int frames : {64, 257}) {
+            DubEchoHarness harness(rate, frames);
+            SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+            const int ramp = static_cast<int>(rate * 0.0033);
+            int processed = 0;
+            while (processed < 3 * ramp) {
+                harness.process(0.5);
+                processed += frames;
+                const float expected = processed < ramp ? 0.7f * (1.0f - float(processed) / ramp) :
+                        std::min(1.0f, float(processed - ramp) / ramp);
+                EXPECT_NEAR(harness.state().outputGain, expected, 1e-5);
+            }
+            EXPECT_FLOAT_EQ(harness.state().outputGain, 1.0f);
+        }
+    }
+}
+
+TEST(ColorFxEffectTest, DubEchoSettledBranchGainsDoNotRetainConstructorAttenuation) {
+    for (int branch : {0, 1}) {
+        DubEchoHarness harness;
+        SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+        for (int block = 0; block < 8; ++block) harness.process(0.5);
+        auto& delay = harness.state().branches[branch].delay;
+        for (int i = 0; i < delay.size(); ++i) delay[i] = 1.0f;
+        for (int block = 0; block < 4; ++block) harness.process(0.5);
+        EXPECT_NEAR(harness.output()[harness.samplesPerBuffer() - 2], branch == 0 ? 0.7f : 1.0f, 1e-5);
+    }
+}
+
 TEST(ColorFxEffectTest, FlangerLinearFeedbackAndFractionalDelay) {
     for (double manual : {1.0, 1.01}) {
         FlangerHarness harness;
@@ -244,6 +282,62 @@ TEST(ColorFxEffectTest, FlangerDryAndDisableReset) {
     harness.setParameter("mix", 1);
     harness.process(0.75);
     for (int i = 0; i < harness.samplesPerBuffer(); ++i) ASSERT_EQ(harness.output()[i], 0);
+}
+
+TEST(ColorFxEffectTest, FlangerFullEngineChainPreservesWetSignalAtUnityMix) {
+    for (const double mix : {0.433333, 1.0}) {
+        EffectsBackendManagerPointer backend(new EffectsBackendManager());
+        ChannelHandleFactory handles;
+        const QString group = QStringLiteral("[Channel1]");
+        const auto handle = handles.getOrCreateHandle(group);
+        const QSet<ChannelHandleAndGroup> channels{ChannelHandleAndGroup(handle, group)};
+        const auto manifest = FlangerEffect::getManifest();
+        EngineEffect effect(manifest, backend, channels, channels, channels);
+        EngineEffectChain chain(QStringLiteral("[EffectRack1_EffectUnit1]"), channels, channels);
+        auto pipes = TwoWayMessagePipe<EffectsRequest*, EffectsResponse>::makeTwoWayMessagePipe(32, 32);
+        auto* responses = pipes.second.get();
+        EffectsRequest request;
+        request.type = EffectsRequest::ADD_EFFECT_TO_CHAIN;
+        request.AddEffectToChain.pEffect = &effect;
+        request.AddEffectToChain.iIndex = 0;
+        ASSERT_TRUE(chain.processEffectsRequest(request, responses));
+        request.type = EffectsRequest::SET_EFFECT_CHAIN_PARAMETERS;
+        request.SetEffectChainParameters.enabled = true;
+        request.SetEffectChainParameters.mix_mode = EffectChainMixMode::DrySlashWet;
+        request.SetEffectChainParameters.mix = mix;
+        ASSERT_TRUE(chain.processEffectsRequest(request, responses));
+        request.type = EffectsRequest::ENABLE_EFFECT_CHAIN_FOR_INPUT_CHANNEL;
+        request.EnableInputChannelForChain.channelHandle = handle;
+        ASSERT_TRUE(chain.processEffectsRequest(request, responses));
+        request.type = EffectsRequest::SET_EFFECT_PARAMETERS;
+        request.SetEffectParameters.enabled = true;
+        ASSERT_TRUE(effect.processEffectsRequest(request, responses));
+        const QMap<QString, double> values{{QStringLiteral("width"), 0.0},
+                {QStringLiteral("manual"), 1.0}, {QStringLiteral("mix"), 1.0}};
+        for (int index = 0; index < manifest->parameters().size(); ++index) {
+            const auto id = manifest->parameters()[index]->id();
+            if (values.contains(id)) {
+                request.type = EffectsRequest::SET_PARAMETER_PARAMETERS;
+                request.SetParameterParameters.iParameter = index;
+                request.value = values.value(id);
+                ASSERT_TRUE(effect.processEffectsRequest(request, responses));
+            }
+        }
+        mixxx::SampleBuffer input(kFramesPerBuffer * 2), output(kFramesPerBuffer * 2);
+        input.clear(); output.clear();
+        GroupFeatureState features;
+        features.beat_length = GroupFeatureBeatLength{0.5, 1.0};
+        for (int block = 0; block < 30; ++block) {
+            chain.process(handle, handle, input.data(), output.data(),
+                    input.size(), kSampleRate, features, false);
+        }
+        input[0] = 0.2f;
+        ASSERT_TRUE(chain.process(handle, handle, input.data(), output.data(),
+                input.size(), kSampleRate, features, false));
+        EXPECT_NEAR(output[0], 0.2 * (1.0 - 0.25 * mix), 1e-6);
+        EXPECT_NEAR(output[48 * 2], 0.2 * 0.75 * mix, 1e-6);
+        EXPECT_FLOAT_EQ(output[48 * 2 + 1], 0.0f);
+    }
 }
 
 } // namespace

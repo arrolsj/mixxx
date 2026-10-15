@@ -5,6 +5,23 @@
 namespace mixxx {
 namespace qml {
 
+TEST(QmlFxMappingLearningTest, UnitTimeBindingsKeepBothUnitsIndependent) {
+    for (int unit : {1, 2}) {
+        const QString action = QStringLiteral("lastcue.fx.group.deck%1.time_adjust").arg(unit);
+        const auto absolute = QmlFxMappingLearning::controlKeyForAction(action);
+        EXPECT_EQ(absolute, ConfigKey(QStringLiteral("[LastCueFX]"),
+                                   QStringLiteral("time_adjust_unit%1").arg(unit)));
+        EXPECT_EQ(QmlFxMappingLearning::actionIdForControlKey(absolute), action);
+        const auto relative = QmlFxMappingLearning::controlKeyForTimeBinding(
+                MidiOptions(MidiOption::SelectKnob), unit);
+        EXPECT_EQ(relative, ConfigKey(QStringLiteral("[LastCueFX]"),
+                                   QStringLiteral("time_delta_unit%1").arg(unit)));
+        EXPECT_EQ(QmlFxMappingLearning::actionIdForControlKey(relative), action);
+        EXPECT_NE(relative, QmlFxMappingLearning::controlKeyForTimeBinding(
+                                   MidiOptions(MidiOption::SelectKnob), 3 - unit));
+    }
+}
+
 TEST(QmlFxMappingLearningTest, ExposesCompactGeneralAndFxActionSets) {
     EXPECT_EQ(QmlFxMappingLearning::generalActionIds().size(), 17);
     EXPECT_EQ(QmlFxMappingLearning::generalActionIds().first(),
@@ -21,8 +38,8 @@ TEST(QmlFxMappingLearningTest, ExposesCompactGeneralAndFxActionSets) {
                     QStringLiteral("lastcue.fx.target.master"),
                     QStringLiteral("lastcue.fx.time_adjust"),
             }));
-    EXPECT_EQ(QmlFxMappingLearning::group3ActionIds().size(), 13);
-    EXPECT_EQ(QmlFxMappingLearning::supportedActionIds().size(), 35);
+    EXPECT_EQ(QmlFxMappingLearning::group3ActionIds().size(), 14);
+    EXPECT_EQ(QmlFxMappingLearning::supportedActionIds().size(), 37);
 }
 
 TEST(QmlFxMappingLearningTest, GeneralActionsRoundTripThroughRealAndBoxControls) {
@@ -90,7 +107,7 @@ TEST(QmlFxMappingLearningTest,
                       0x00,
                       QStringLiteral("[EffectRack1_EffectUnit1]"),
                       QStringLiteral("PioneerDDJSX.effectUnit[1].dryWetKnob.input"))),
-            QStringLiteral("lastcue.fx.time_adjust"));
+            QStringLiteral("lastcue.fx.group.deck1.time_adjust"));
 
     EXPECT_TRUE(QmlFxMappingLearning::actionIdForMapping(scriptMapping(0xB5,
                                                                  0x16,

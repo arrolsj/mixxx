@@ -12,6 +12,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <memory>
+#include <array>
 
 #include "controllers/midi/midimessage.h"
 #include "preferences/usersettings.h"
@@ -76,7 +77,7 @@ class QmlFxMappingLearning : public QObject {
     static ConfigKey controlKeyForAction(const QString& actionId);
     static QString actionIdForControlKey(const ConfigKey& key);
     static QString actionIdForMapping(const MidiInputMapping& mapping);
-    static ConfigKey controlKeyForTimeBinding(MidiOptions options);
+    static ConfigKey controlKeyForTimeBinding(MidiOptions options, int unitNumber = 0);
     static QString behaviorKindForOptions(MidiOptions options);
     static QString factoryPresetDisplayName(const QString& mappingName);
     static bool isKnownNativeGroup3Controller(
@@ -295,6 +296,8 @@ class QmlFxMappingLearning : public QObject {
     std::unique_ptr<ControlPushButton> m_pTargetMasterControl;
     std::unique_ptr<ControlPotmeter> m_pTimeAdjustControl;
     std::unique_ptr<ControlEncoder> m_pTimeDeltaControl;
+    std::array<std::unique_ptr<ControlPotmeter>, 2> m_pUnitTimeAdjustControls;
+    std::array<std::unique_ptr<ControlEncoder>, 2> m_pUnitTimeDeltaControls;
     std::unique_ptr<ControlPushButton> m_pTempoRangeDeck1Control;
     std::unique_ptr<ControlPushButton> m_pTempoRangeDeck2Control;
     std::unique_ptr<ControlPotmeter> m_pSuppressedControl;

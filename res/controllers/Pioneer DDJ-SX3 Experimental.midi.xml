@@ -6135,13 +6135,13 @@
                 </options>
             </control>
             <control>
-                <group>[EffectRack1_EffectUnit1]</group>
-                <key>PioneerDDJSX.effectUnit[1].dryWetKnob.input</key>
-                <description>Dry/Wet Mixing Ratio of Effect Unit 1, Knob: FX1 BEATS</description>
+                <group>[LastCueFX]</group>
+                <key>time_delta_unit1</key>
+                <description>FX1 Beat period for this unit, Knob: FX1 BEATS</description>
                 <status>0xB4</status>
                 <midino>0x00</midino>
                 <options>
-                    <script-binding/>
+                    <selectknob/>
                 </options>
             </control>
             <control>
@@ -6325,13 +6325,13 @@
                 </options>
             </control>
             <control>
-                <group>[EffectRack1_EffectUnit2]</group>
-                <key>PioneerDDJSX.effectUnit[2].dryWetKnob.input</key>
-                <description>Dry/Wet Mixing Ratio of Effect Unit 2, Knob: FX2 BEATS</description>
+                <group>[LastCueFX]</group>
+                <key>time_delta_unit2</key>
+                <description>FX2 Beat period for this unit, Knob: FX2 BEATS</description>
                 <status>0xB5</status>
                 <midino>0x00</midino>
                 <options>
-                    <script-binding/>
+                    <selectknob/>
                 </options>
             </control>
             <control>
