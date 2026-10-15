@@ -11,6 +11,9 @@
 namespace {
 constexpr double kCenter = 0.5;
 constexpr double kQ = 0.7071067811865476;
+// The default USER/M control path keeps both core output gains at 0.7.
+// Its fixed filter types do not enter the separate filter-change fade to unity.
+constexpr float kDefaultBranchOutputGain = 0.7f;
 
 void setBranch(ColorDubEchoGroupState::Branch* branch,
         double distance, bool left, double sampleRate, int rampFrames) {
@@ -56,7 +59,6 @@ ColorDubEchoGroupState::ColorDubEchoGroupState(const mixxx::EngineParameters& pa
     leftPre->assumeSettled();
     rightPre->assumeSettled();
     rightPost->assumeSettled();
-    outputGainRemaining = std::max(1, static_cast<int>(parameters.sampleRate() * 0.0033));
     for (auto& branch : branches) {
         branch.delayFrames = branch.nextDelayFrames = branch.requestedDelayFrames =
                 parameters.sampleRate() * 0.055;
@@ -75,7 +77,7 @@ EffectManifestPointer ColorDubEchoEffect::getManifest() {
     manifest->setName(QObject::tr("Color Dub Echo"));
     manifest->setShortName(QObject::tr("Color Dub Echo"));
     manifest->setAuthor("The LastCUE Box Team");
-    manifest->setVersion("3.1");
+    manifest->setVersion("3.2");
     manifest->setDescription(QObject::tr("Dual filtered dub echo with a single Color control"));
     // The engine fades effect enable/disable; Color center only stops new sends.
     manifest->setEffectRampsFromDry(false);
@@ -151,19 +153,9 @@ void ColorDubEchoEffect::processChannel(ColorDubEchoGroupState* state,
     auto& right = state->branches[1].work;
     state->rightPost->process(right.data(), right.data(), parameters.samplesPerBuffer());
     for (int frame = 0; frame < parameters.framesPerBuffer(); ++frame) {
-        if (state->outputGainRemaining > 0) {
-            state->outputGain += (state->outputGainFadingOut ? -0.7f : 1.0f) / rampFrames;
-            if (--state->outputGainRemaining == 0) {
-                state->outputGain = state->outputGainFadingOut ? 0.0f : 1.0f;
-                if (state->outputGainFadingOut) {
-                    state->outputGainFadingOut = false;
-                    state->outputGainRemaining = rampFrames;
-                }
-            }
-        }
         for (int channel = 0; channel < channels; ++channel) {
             const int i = frame * channels + channel;
-            output[i] = input[i] + state->outputGain * (0.7f * left[i] + right[i]);
+            output[i] = input[i] + kDefaultBranchOutputGain * (0.7f * left[i] + right[i]);
         }
     }
     if (enableState == EffectEnableState::Disabling) {

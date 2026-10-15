@@ -35,10 +35,6 @@ class ColorDubEchoGroupState final : public EffectState {
     int color = 127;
     int controlCountdown = 0;
     int writeFrame = 0;
-    // Default filter selection fades the branch output down, then up to unity.
-    float outputGain = 0.7f;
-    int outputGainRemaining = 0;
-    bool outputGainFadingOut = true;
     std::array<Branch, 2> branches;
     std::unique_ptr<EngineFilterBiquad1Band> leftPre;
     std::unique_ptr<EngineFilterBiquad1High> rightPre;

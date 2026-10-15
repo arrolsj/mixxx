@@ -219,26 +219,41 @@ TEST(ColorFxEffectTest, DubEchoHasOnlyOneExternalParameter) {
     EXPECT_EQ(parameters.first()->id(), QStringLiteral("color"));
 }
 
-TEST(ColorFxEffectTest, DubEchoDefaultFilterGainReachesUnityAcrossBlockSizes) {
+TEST(ColorFxEffectTest, DubEchoMatchesDefaultMasterControlSnapshots) {
+    // Runtime reads from USER/DUB ECHO while moving only the Master COLOR knob.
+    // Auxiliary PARAM stayed 0.5; values are captured fixtures, not a curve model.
+    struct Snapshot {
+        double color;
+        int code;
+        double leftMs, rightMs;
+        float leftFeedback, rightFeedback, leftSend, rightSend;
+    };
+    const Snapshot snapshots[] = {
+            {0.6320000290870667, 161, 55, 55, .87f, .88f, 0, .6321839094161987f},
+            {1, 255, 55, 150, .87f, .98f, 0, 1},
+            {0, 0, 189, 55, .95f, .88f, 1, 0},
+            {.5, 127, 55, 55, .87f, .88f, 0, 0}};
     for (int rate : {44100, 48000, 96000}) {
         for (int frames : {64, 257}) {
             DubEchoHarness harness(rate, frames);
             SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
-            const int ramp = static_cast<int>(rate * 0.0033);
-            int processed = 0;
-            while (processed < 3 * ramp) {
-                harness.process(0.5);
-                processed += frames;
-                const float expected = processed < ramp ? 0.7f * (1.0f - float(processed) / ramp) :
-                        std::min(1.0f, float(processed - ramp) / ramp);
-                EXPECT_NEAR(harness.state().outputGain, expected, 1e-5);
+            for (const auto& snapshot : snapshots) {
+                for (int processed = 0; processed < rate / 3; processed += frames)
+                    harness.process(snapshot.color);
+                const auto& state = harness.state();
+                EXPECT_EQ(state.color, snapshot.code);
+                EXPECT_NEAR(state.branches[0].delayFrames, rate * snapshot.leftMs / 1000, 1e-5);
+                EXPECT_NEAR(state.branches[1].delayFrames, rate * snapshot.rightMs / 1000, 1e-5);
+                EXPECT_NEAR(state.branches[0].feedback, snapshot.leftFeedback, 1e-6);
+                EXPECT_NEAR(state.branches[1].feedback, snapshot.rightFeedback, 1e-6);
+                EXPECT_NEAR(state.branches[0].send, snapshot.leftSend, 1e-6);
+                EXPECT_NEAR(state.branches[1].send, snapshot.rightSend, 1e-6);
             }
-            EXPECT_FLOAT_EQ(harness.state().outputGain, 1.0f);
         }
     }
 }
 
-TEST(ColorFxEffectTest, DubEchoSettledBranchGainsDoNotRetainConstructorAttenuation) {
+TEST(ColorFxEffectTest, DubEchoBranchOutputGainsMatchDefaultMasterPath) {
     for (int branch : {0, 1}) {
         DubEchoHarness harness;
         SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
@@ -246,7 +261,7 @@ TEST(ColorFxEffectTest, DubEchoSettledBranchGainsDoNotRetainConstructorAttenuati
         auto& delay = harness.state().branches[branch].delay;
         for (int i = 0; i < delay.size(); ++i) delay[i] = 1.0f;
         for (int block = 0; block < 4; ++block) harness.process(0.5);
-        EXPECT_NEAR(harness.output()[harness.samplesPerBuffer() - 2], branch == 0 ? 0.7f : 1.0f, 1e-5);
+        EXPECT_NEAR(harness.output()[harness.samplesPerBuffer() - 2], branch == 0 ? 0.49f : 0.7f, 1e-5);
     }
 }
 
