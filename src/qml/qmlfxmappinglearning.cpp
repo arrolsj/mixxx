@@ -953,6 +953,8 @@ void QmlFxMappingLearning::saveDerivedFxMapping() {
                 "The derived mapping name is no longer available."));
         return;
     }
+    // The new file is the only change to the user mapping directory.
+    m_customCatalogLoaded = false;
     emit presetCatalogChanged();
     m_pWorkingMapping->setDirty(false);
 
@@ -1011,6 +1013,13 @@ void QmlFxMappingLearning::saveDerivedFxMapping() {
 void QmlFxMappingLearning::applyPreset(const QString& path) {
     if (!isAllowedPresetPath(path)) {
         setErrorMessage(QStringLiteral("This mapping preset is not available."));
+        return;
+    }
+    if (!m_sessionActive && !currentMappingPath().isEmpty() &&
+            normalizedPath(currentMappingPath()) == normalizedPath(path)) {
+        // Reapplying the active preset would only restart the controller
+        // script engine.
+        setErrorMessage({});
         return;
     }
     if (m_sessionActive) {
@@ -1483,8 +1492,7 @@ void QmlFxMappingLearning::suppressMappings(
     for (const auto& source : mappings) {
         bool alreadySuppressed = false;
         for (const auto& existing : std::as_const(m_suppressedMappings)) {
-            if (existing.key.key == source.key.key &&
-                    existing.options == source.options) {
+            if (existing.key.key == source.key.key) {
                 alreadySuppressed = true;
                 break;
             }
@@ -1492,32 +1500,65 @@ void QmlFxMappingLearning::suppressMappings(
         if (alreadySuppressed) {
             continue;
         }
-        auto suppressed = source;
-        suppressed.control = ConfigKey(kMappingControlGroup, kSuppressedControl);
-        m_suppressedMappings.append(suppressed);
+        m_suppressedMappings.append(suppressedMappingFor(source));
     }
 }
 
+// static
+MidiInputMapping QmlFxMappingLearning::suppressedMappingFor(
+        const MidiInputMapping& source) {
+    // Keeping a Script option would make the controller call a script
+    // function named "suppressed" for every message, which throws and opens
+    // Mixxx's native "Controller Mapping Error" dialog.
+    return MidiInputMapping(source.key,
+            MidiOptions(),
+            ConfigKey(kMappingControlGroup, kSuppressedControl));
+}
+
+// static
+QVariantList QmlFxMappingLearning::catalogWithCurrent(
+        const QList<QVariantMap>& catalog, const QString& currentPath) {
+    const QString current = normalizedPath(currentPath);
+    QVariantList result;
+    for (auto item : catalog) {
+        item.insert(QStringLiteral("current"),
+                !current.isEmpty() &&
+                        normalizedPath(item.value(QStringLiteral("path"))
+                                               .toString()) == current);
+        result.append(item);
+    }
+    return result;
+}
+
+QString QmlFxMappingLearning::currentMappingPath() const {
+    return m_pController && m_pController->getMapping()
+            ? m_pController->getMapping()->filePath()
+            : QString();
+}
 
 QVariantList QmlFxMappingLearning::presetCatalog(bool custom) const {
-    QVariantList result;
-    if (!m_pManager) {
-        return result;
+    return catalogWithCurrent(cachedPresetCatalog(custom), currentMappingPath());
+}
+
+const QList<QVariantMap>& QmlFxMappingLearning::cachedPresetCatalog(
+        bool custom) const {
+    QList<QVariantMap>& catalog = custom ? m_customCatalog : m_factoryCatalog;
+    bool& loaded = custom ? m_customCatalogLoaded : m_factoryCatalogLoaded;
+    if (loaded || !m_pManager) {
+        return catalog;
     }
     auto pEnumerator = custom
             ? m_pManager->getMainThreadUserMappingEnumerator()
             : m_pManager->getMainThreadSystemMappingEnumerator();
     if (!pEnumerator) {
-        return result;
+        return catalog;
     }
 
     pEnumerator->loadSupportedMappings();
     const auto mappings =
             pEnumerator->getMappingsByExtension(MIDI_MAPPING_EXTENSION);
-    const QString currentPath = m_pController && m_pController->getMapping()
-            ? normalizedPath(m_pController->getMapping()->filePath())
-            : QString();
-    QList<QVariantMap> catalog;
+    catalog.clear();
+    loaded = true;
     for (const auto& info : mappings) {
         if (!info.isValid()) {
             continue;
@@ -1541,8 +1582,6 @@ QVariantList QmlFxMappingLearning::presetCatalog(bool custom) const {
                        : factoryPresetDisplayName(info.getName()));
         item.insert(QStringLiteral("description"), info.getDescription());
         item.insert(QStringLiteral("custom"), custom);
-        item.insert(QStringLiteral("current"),
-                normalizedPath(info.getPath()) == currentPath);
         QString provenance = QStringLiteral("lastcue-derived");
         if (!custom) {
             provenance = info.getName() ==
@@ -1567,26 +1606,23 @@ QVariantList QmlFxMappingLearning::presetCatalog(bool custom) const {
                         kFactoryPresetNames.indexOf(
                                 right.value(QStringLiteral("name")).toString());
             });
-    for (const auto& item : catalog) {
-        result.append(item);
-    }
-    return result;
+    return catalog;
 }
 
 bool QmlFxMappingLearning::isAllowedPresetPath(
         const QString& path) const {
     const QString requested = normalizedPath(path);
-    const auto isInCatalog = [&requested](const QVariantList& catalog) {
-        for (const auto& value : catalog) {
-            if (normalizedPath(
-                        value.toMap().value(QStringLiteral("path")).toString()) ==
+    const auto isInCatalog = [&requested](const QList<QVariantMap>& catalog) {
+        for (const auto& item : catalog) {
+            if (normalizedPath(item.value(QStringLiteral("path")).toString()) ==
                     requested) {
                 return true;
             }
         }
         return false;
     };
-    return isInCatalog(factoryPresets()) || isInCatalog(customPresets());
+    return isInCatalog(cachedPresetCatalog(false)) ||
+            isInCatalog(cachedPresetCatalog(true));
 }
 
 QString QmlFxMappingLearning::derivedMappingPath(

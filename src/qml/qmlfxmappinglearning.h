@@ -83,6 +83,12 @@ class QmlFxMappingLearning : public QObject {
             const QString& controllerName,
             const QString& mappingName);
     static QString topologyForMappingDescription(const QString& description);
+    /// The no-op mapping that hides an original binding while learning. It
+    /// targets a plain control, never a script function, whatever the source.
+    static MidiInputMapping suppressedMappingFor(const MidiInputMapping& source);
+    /// Mark the entry whose path is the active mapping as current.
+    static QVariantList catalogWithCurrent(
+            const QList<QVariantMap>& catalog, const QString& currentPath);
     static QVariantMap describeLogicalBinding(
             const MidiInputMappings& mappings);
 
@@ -231,6 +237,8 @@ class QmlFxMappingLearning : public QObject {
     void removeAcceptedBindingsForAction(const QString& actionId);
     void suppressMappings(const MidiInputMappings& mappings);
     QVariantList presetCatalog(bool custom) const;
+    const QList<QVariantMap>& cachedPresetCatalog(bool custom) const;
+    QString currentMappingPath() const;
     bool isAllowedPresetPath(const QString& path) const;
     QString derivedMappingPath(QString* pMappingName) const;
     static QSet<uint16_t> physicalKeysForMappings(
@@ -272,6 +280,13 @@ class QmlFxMappingLearning : public QObject {
     QString m_controllerLabel;
     QString m_mappingLabel;
     QTimer m_captureTimer;
+    // Scanning the mapping directories parses every mapping file (about
+    // 1.7 s for the 143 system mappings on the KickPi), so the catalogs are
+    // read once and the custom one again only after a derived mapping is saved.
+    mutable QList<QVariantMap> m_factoryCatalog;
+    mutable QList<QVariantMap> m_customCatalog;
+    mutable bool m_factoryCatalogLoaded{false};
+    mutable bool m_customCatalogLoaded{false};
 
     std::unique_ptr<ControlEncoder> m_pSelectDeltaControl;
     std::unique_ptr<ControlPushButton> m_pToggleSelectedControl;

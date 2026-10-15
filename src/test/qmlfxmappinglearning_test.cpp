@@ -225,5 +225,44 @@ TEST(QmlFxMappingLearningTest, DescribesButtonPairAsOneLogicalBinding) {
             QStringLiteral("CH 1 · 0x90/0x41"));
 }
 
+TEST(QmlFxMappingLearningTest, SuppressedScriptBindingNeverCallsAScript) {
+    // A learned SX3 FX time knob replaces a script binding. The no-op that
+    // hides it must not keep the Script option, or every message calls an
+    // undefined "suppressed" function and Mixxx opens its error dialog.
+    MidiOptions scriptOptions(MidiOption::Script);
+    scriptOptions.setFlag(MidiOption::SelectKnob);
+    const MidiInputMapping source(MidiKey(0xB4, 0x00),
+            scriptOptions,
+            ConfigKey(QStringLiteral("[EffectRack1_EffectUnit1]"),
+                    QStringLiteral("PioneerDDJSX.effectUnit[1].dryWetKnob.input")));
+
+    const auto suppressed = QmlFxMappingLearning::suppressedMappingFor(source);
+    EXPECT_EQ(suppressed.key.key, source.key.key);
+    EXPECT_EQ(suppressed.options, MidiOptions());
+    EXPECT_FALSE(suppressed.options.testFlag(MidiOption::Script));
+    ASSERT_TRUE(std::holds_alternative<ConfigKey>(suppressed.control));
+    EXPECT_EQ(std::get<ConfigKey>(suppressed.control),
+            ConfigKey(QStringLiteral("[LastCueMapping]"),
+                    QStringLiteral("suppressed")));
+}
+
+TEST(QmlFxMappingLearningTest, CachedCatalogMarksOnlyTheActiveMappingCurrent) {
+    const QList<QVariantMap> catalog = {
+            {{QStringLiteral("path"), QStringLiteral("/opt/mappings/SX3.midi.xml")}},
+            {{QStringLiteral("path"), QStringLiteral("/profile/controllers/My SX3.midi.xml")}},
+    };
+
+    const auto marked = QmlFxMappingLearning::catalogWithCurrent(
+            catalog, QStringLiteral("/profile/controllers/./My SX3.midi.xml"));
+    ASSERT_EQ(marked.size(), 2);
+    EXPECT_FALSE(marked[0].toMap().value(QStringLiteral("current")).toBool());
+    EXPECT_TRUE(marked[1].toMap().value(QStringLiteral("current")).toBool());
+
+    const auto none = QmlFxMappingLearning::catalogWithCurrent(catalog, QString());
+    for (const auto& item : none) {
+        EXPECT_FALSE(item.toMap().value(QStringLiteral("current")).toBool());
+    }
+}
+
 } // namespace qml
 } // namespace mixxx
