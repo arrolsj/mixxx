@@ -48,6 +48,18 @@ struct GridBeat {
     int tempo;
 };
 
+/// Convert one exported beat. The decoder timing offset may move the first
+/// beats before the start of the track; they keep that position here so the
+/// grid fit stays exact (see beatsFromGrid for the beat map fallback).
+inline GridBeat gridBeatFromExport(audio::SampleRate sampleRate,
+        int timeMillis,
+        int timingOffsetMillis,
+        int tempo) {
+    return {audio::FramePos(sampleRate.value() / 1000.0 *
+                    static_cast<double>(timeMillis - timingOffsetMillis)),
+            tempo};
+}
+
 /// Build beats from a Rekordbox beat grid. Its beat times are rounded to
 /// whole milliseconds, so a beat map of those times makes the local BPM
 /// wander by about 0.1. Each run of beats with the same exported tempo is
@@ -70,10 +82,13 @@ inline BeatsPointer beatsFromGrid(audio::SampleRate sampleRate,
         return 60.0 * 100.0 * sampleRate.value() / tempo;
     };
     const auto exportedPositions = [&] {
+        // A decoder offset can move the first exported beats before the
+        // start of the track; a beat map keeps them at 1 ms.
+        const audio::FramePos earliestPosition(sampleRate.value() / 1000.0);
         QVector<audio::FramePos> positions;
         positions.reserve(grid.size());
         for (const auto& beat : grid) {
-            positions.append(beat.position);
+            positions.append(std::max(beat.position, earliestPosition));
         }
         const int firstTempo = grid.first().tempo;
         return Beats::fromBeatPositions(sampleRate,

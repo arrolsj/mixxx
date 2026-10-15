@@ -129,6 +129,35 @@ TEST(RekordboxBeatGridTest, TempoChangesBecomeConstantSections) {
     expectOnExportedBeats(beats, grid);
 }
 
+TEST(RekordboxBeatGridTest, BeatBeforeTrackStartStillFitsConstantGrid) {
+    // A 140 BPM export whose first beat is at 25 ms, read with a 26 ms MP3
+    // decoder offset. Clamping that beat to 1 ms put it 2 ms off the line
+    // and the whole grid fell back to a jittering beat map.
+    const double beatMs = 60000.0 / 140.0;
+    QVector<GridBeat> grid;
+    for (int i = 0; i < 262; ++i) {
+        grid.append(gridBeatFromExport(kSampleRate,
+                static_cast<int>(std::round(25.0 + i * beatMs)),
+                26,
+                14000));
+    }
+    EXPECT_DOUBLE_EQ(-kSampleRate.value() / 1000.0, grid.first().position.value());
+    const auto beats = beatsFromGrid(kSampleRate, grid, 4, QString());
+    ASSERT_TRUE(beats);
+    EXPECT_TRUE(beats->getMarkers().empty());
+    EXPECT_NEAR(140.0, beats->getLastMarkerBpm().value(), 0.01);
+    expectOnExportedBeats(beats, grid);
+}
+
+TEST(RekordboxBeatGridTest, BeatMapKeepsBeatsBeforeTrackStartAtOneMillisecond) {
+    auto grid = exportedGrid(-1.0, 8, 12800);
+    grid[4].tempo = 0;
+    const auto beats = beatsFromGrid(kSampleRate, grid, 1, QString());
+    ASSERT_TRUE(beats);
+    EXPECT_DOUBLE_EQ(kSampleRate.value() / 1000.0,
+            beats->findClosestBeat(audio::kStartFramePos).value());
+}
+
 TEST(RekordboxBeatGridTest, MissingTempoKeepsExportedPositions) {
     auto grid = exportedGrid(1000.0, 8, 12800);
     grid[4].tempo = 0;

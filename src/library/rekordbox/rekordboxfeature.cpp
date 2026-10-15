@@ -1186,13 +1186,10 @@ void readAnalyze(TrackPointer track,
                 if (grid.isEmpty()) {
                     firstBeatNumber = static_cast<int>(beat->beat_number());
                 }
-                int time = static_cast<int>(beat->time()) - timingOffset;
-                // Ensure no offset times are less than 1
-                if (time < 1) {
-                    time = 1;
-                }
-                grid.append({mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time)),
-                        static_cast<int>(beat->tempo())});
+                grid.append(mixxx::rekordbox::gridBeatFromExport(sampleRate,
+                        static_cast<int>(beat->time()),
+                        timingOffset,
+                        static_cast<int>(beat->tempo())));
             }
 
             const auto pBeats = mixxx::rekordbox::beatsFromGrid(sampleRate,
