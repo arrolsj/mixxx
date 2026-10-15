@@ -1,18 +1,14 @@
 #include "effects/backends/builtin/flangereffect.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "effects/backends/effectmanifest.h"
 #include "engine/effects/engineeffectparameter.h"
-#include "util/math.h"
 
 namespace {
 
-// Gain correction was verified with replay gain and default parameters
-constexpr CSAMPLE kGainCorrection = 1.41253754f; // 3 dB
-
-inline CSAMPLE tanh_approx(CSAMPLE input) {
-    // return tanhf(input); // 142ns for process;
-    return input / (1 + input * input / (3 + input * input / 5)); // 119ns for process
-}
+constexpr float kDefaultFeedback = 0.266666591f;
 } // namespace
 
 // static
@@ -27,7 +23,7 @@ EffectManifestPointer FlangerEffect::getManifest() {
     pManifest->setName(QObject::tr("Flanger"));
     pManifest->setShortName(QObject::tr("Flanger"));
     pManifest->setAuthor("The Mixxx Team");
-    pManifest->setVersion("1.0");
+    pManifest->setVersion("2.0");
     pManifest->setDescription(
             QObject::tr("Mixes the input with a delayed, pitch modulated copy "
                         "of itself to create comb filtering"));
@@ -38,7 +34,7 @@ EffectManifestPointer FlangerEffect::getManifest() {
     speed->setShortName(QObject::tr("Speed"));
     speed->setDescription(QObject::tr(
             "Speed of the LFO (low frequency oscillator)\n"
-            "32 - 1/4 beats rounded to 1/2 beat per LFO cycle if tempo is detected\n"
+            "32 - 1/4 beats per triangle LFO cycle if tempo is detected\n"
             "1/32 - 4 Hz if no tempo is detected"));
     speed->setValueScaler(EffectManifestParameter::ValueScaler::LogarithmicInverse);
     speed->setRange(kMinLfoBeats, 8, kMaxLfoBeats);
@@ -51,7 +47,7 @@ EffectManifestPointer FlangerEffect::getManifest() {
             "Delay amplitude of the LFO (low frequency oscillator)"));
     width->setValueScaler(EffectManifestParameter::ValueScaler::Logarithmic);
     width->setUnitsHint(EffectManifestParameter::UnitsHint::Millisecond);
-    width->setRange(0.0, kMaxLfoWidthMs / 2, kMaxLfoWidthMs);
+    width->setRange(0.0, kMaxLfoWidthMs, kMaxLfoWidthMs);
 
     EffectManifestParameterPointer manual = pManifest->addParameter();
     manual->setId("manual");
@@ -72,7 +68,7 @@ EffectManifestPointer FlangerEffect::getManifest() {
             "How much of the delay output is feed back into the input"));
     regen->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
     regen->setUnitsHint(EffectManifestParameter::UnitsHint::Unknown);
-    regen->setRange(0.0, 0.25, 1.0);
+    regen->setRange(0.0, kDefaultFeedback, 0.93);
 
     EffectManifestParameterPointer mix = pManifest->addParameter();
     mix->setId("mix");
@@ -119,7 +115,7 @@ void FlangerEffect::processChannel(
     double lfoPeriodFrames;
     if (groupFeatures.beat_length.has_value()) {
         // lfoPeriodParameter is a number of beats
-        lfoPeriodParameter = std::max(roundToFraction(lfoPeriodParameter, 2.0), kMinLfoBeats);
+        lfoPeriodParameter = std::max(lfoPeriodParameter, kMinLfoBeats);
         if (m_pTripletParameter->toBool()) {
             lfoPeriodParameter /= 3.0;
         }
@@ -131,6 +127,10 @@ void FlangerEffect::processChannel(
         lfoPeriodFrames = std::max(lfoPeriodParameter, kMinLfoBeats) *
                 engineParameters.sampleRate();
     }
+
+    lfoPeriodFrames = std::clamp(lfoPeriodFrames,
+            0.01 * engineParameters.sampleRate(), 32.0 * engineParameters.sampleRate());
+    lfoPeriodFrames = std::max(1.0, std::floor(lfoPeriodFrames));
 
     // When the period is changed, the position of the sound shouldn't
     // so time need to be recalculated
@@ -156,22 +156,27 @@ void FlangerEffect::processChannel(
 
     // With and Manual is limited by amount of amplitude that remains from width
     // to kMaxDelayMs
-    double width = m_pWidthParameter->value();
+    double width = std::clamp(m_pWidthParameter->value(), 0.0, kMaxLfoWidthMs);
     double manual = m_pManualParameter->value();
     double maxManual = kCenterDelayMs + (kMaxLfoWidthMs - width) / 2;
     double minManual = kCenterDelayMs - (kMaxLfoWidthMs - width) / 2;
     manual = math_clamp(manual, minManual, maxManual);
 
-    RampingValue<double> widthRamped(
-            pState->prev_width, width, engineParameters.framesPerBuffer());
-    pState->prev_width = static_cast<CSAMPLE_GAIN>(width);
+    const int smoothFrames = std::max(1, static_cast<int>(0.05 * engineParameters.sampleRate()));
+    if (pState->targetWidth != width) {
+        pState->targetWidth = width;
+        pState->widthStep = (width - pState->prev_width) / smoothFrames;
+        pState->widthRemaining = smoothFrames;
+    }
+    if (pState->targetManual != manual) {
+        pState->targetManual = manual;
+        pState->manualStep = (manual - pState->prev_manual) / smoothFrames;
+        pState->manualRemaining = smoothFrames;
+    }
 
-    RampingValue<double> manualRamped(
-            pState->prev_manual, manual, engineParameters.framesPerBuffer());
-    pState->prev_manual = static_cast<CSAMPLE_GAIN>(manual);
-
-    CSAMPLE* delayLeft = pState->delayLeft;
-    CSAMPLE* delayRight = pState->delayRight;
+    CSAMPLE* delayLeft = pState->delayLeft.data();
+    CSAMPLE* delayRight = pState->delayRight.data();
+    const int bufferLength = pState->delayLeft.size();
 
     int rampIndex = 0;
     for (SINT i = 0;
@@ -179,27 +184,33 @@ void FlangerEffect::processChannel(
             i += engineParameters.channelCount()) {
         CSAMPLE_GAIN mix_ramped = mixRamped.getNth(rampIndex);
         CSAMPLE_GAIN regen_ramped = regenRamped.getNth(rampIndex);
-        double width_ramped = widthRamped.getNth(rampIndex);
-        double manual_ramped = manualRamped.getNth(rampIndex);
+        if (pState->widthRemaining > 0) {
+            pState->prev_width += pState->widthStep;
+            if (--pState->widthRemaining == 0) pState->prev_width = pState->targetWidth;
+        }
+        if (pState->manualRemaining > 0) {
+            pState->prev_manual += pState->manualStep;
+            if (--pState->manualRemaining == 0) pState->prev_manual = pState->targetManual;
+        }
+        const double width_ramped = pState->prev_width;
+        const double manual_ramped = pState->prev_manual;
         ++rampIndex;
 
-        pState->lfoFrames++;
-        if (pState->lfoFrames >= lfoPeriodFrames) {
-            pState->lfoFrames = 0;
-        }
-
-        auto periodFraction = pState->lfoFrames / static_cast<float>(lfoPeriodFrames);
-        double delayMs = manual_ramped + width_ramped / 2 * sin(M_PI * 2.0f * periodFraction);
+        const auto halfPeriod = static_cast<unsigned int>(lfoPeriodFrames) / 2;
+        const double triangle = (pState->lfoFrames < halfPeriod ? pState->lfoFrames :
+                lfoPeriodFrames - pState->lfoFrames) * (4.0 / lfoPeriodFrames) - 1.0;
+        const double delayMs = std::clamp(manual_ramped + width_ramped / 2 * triangle,
+                1000.0 / engineParameters.sampleRate(), kMaxDelayMs);
         double delayFrames = delayMs * engineParameters.sampleRate() / 1000;
 
         SINT framePrev =
-                (pState->delayPos - static_cast<SINT>(floor(delayFrames)) +
-                        kBufferLenth) %
-                kBufferLenth;
+                (static_cast<SINT>(pState->delayPos) - static_cast<SINT>(floor(delayFrames)) +
+                        bufferLength) %
+                bufferLength;
         SINT frameNext =
-                (pState->delayPos - static_cast<SINT>(ceil(delayFrames)) +
-                        kBufferLenth) %
-                kBufferLenth;
+                (static_cast<SINT>(pState->delayPos) - static_cast<SINT>(ceil(delayFrames)) +
+                        bufferLength) %
+                bufferLength;
         CSAMPLE prevLeft = delayLeft[framePrev];
         CSAMPLE nextLeft = delayLeft[frameNext];
 
@@ -207,26 +218,38 @@ void FlangerEffect::processChannel(
         CSAMPLE nextRight = delayRight[frameNext];
 
         const CSAMPLE_GAIN frac = static_cast<CSAMPLE_GAIN>(
-                delayFrames - floorf(static_cast<float>(delayFrames)));
+                delayFrames - std::floor(delayFrames));
         CSAMPLE delayedSampleLeft = prevLeft + frac * (nextLeft - prevLeft);
         CSAMPLE delayedSampleRight = prevRight + frac * (nextRight - prevRight);
 
-        delayLeft[pState->delayPos] = tanh_approx(pInput[i] + regen_ramped * delayedSampleLeft);
+        delayLeft[pState->delayPos] = pInput[i] + regen_ramped * delayedSampleLeft;
         delayRight[pState->delayPos] =
-                tanh_approx(pInput[i + 1] + regen_ramped * delayedSampleRight);
+                pInput[i + 1] + regen_ramped * delayedSampleRight;
 
-        pState->delayPos = (pState->delayPos + 1) % kBufferLenth;
-
-        CSAMPLE_GAIN gain = (1 - mix_ramped + kGainCorrection * mix_ramped);
-        pOutput[i] = (pInput[i] + mix_ramped * delayedSampleLeft) / gain;
-        pOutput[i + 1] = (pInput[i + 1] + mix_ramped * delayedSampleRight) / gain;
+        pState->delayPos = (pState->delayPos + 1) % bufferLength;
+        pState->lfoFrames = (pState->lfoFrames + 1) % static_cast<unsigned int>(lfoPeriodFrames);
+        const float targetGain = delayMs < 0.5 ? 0.36860001f + 1.26279998f * delayMs : 1.0f;
+        const float gainStep = 1.0f / std::max(1.0, 0.0033 * engineParameters.sampleRate());
+        pState->outputGain += std::clamp(targetGain - pState->outputGain, -gainStep, gainStep);
+        const float dry = mix_ramped < 0.25f ? 1.0f - mix_ramped : 0.75f;
+        const float wet = mix_ramped < 0.25f ? 3.0f * mix_ramped : 0.75f;
+        const float correction = regen_ramped > 0.8f ?
+                1.0f - 3.3254192f * (regen_ramped - 0.8f) : 1.0f;
+        pOutput[i] = correction * (dry * pInput[i] + wet * pState->outputGain * delayedSampleLeft);
+        pOutput[i + 1] = correction * (dry * pInput[i + 1] + wet * pState->outputGain * delayedSampleRight);
     }
 
     if (enableState == EffectEnableState::Disabling) {
-        SampleUtil::clear(delayLeft, kBufferLenth);
-        SampleUtil::clear(delayRight, kBufferLenth);
+        pState->delayLeft.clear();
+        pState->delayRight.clear();
         pState->previousPeriodFrames = -1;
         pState->prev_regen = 0;
         pState->prev_mix = 0;
+        pState->lfoFrames = pState->delayPos = 0;
+        pState->prev_width = 0;
+        pState->prev_manual = kCenterDelayMs;
+        pState->targetWidth = pState->targetManual = -1;
+        pState->widthRemaining = pState->manualRemaining = 0;
+        pState->outputGain = 1;
     }
 }

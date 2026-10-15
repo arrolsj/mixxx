@@ -1,25 +1,44 @@
 #pragma once
 
+#include <array>
+#include <memory>
+
 #include "effects/backends/effectprocessor.h"
 #include "util/class.h"
 #include "util/samplebuffer.h"
 #include "util/types.h"
 
+class EngineFilterBiquad1Band;
+class EngineFilterBiquad1High;
+class EngineFilterBiquad1Low;
+
 class ColorDubEchoGroupState final : public EffectState {
   public:
-    static constexpr int kMaxDelaySeconds = 3;
-
     explicit ColorDubEchoGroupState(
             const mixxx::EngineParameters& engineParameters);
     ~ColorDubEchoGroupState() override;
 
-    CSAMPLE_GAIN previousColor;
-    int previousDelaySamples;
-    int writePosition;
-    mixxx::SampleBuffer delayBuffer;
-    mixxx::SampleBuffer lowPassState;
-    mixxx::SampleBuffer highPassInputState;
-    mixxx::SampleBuffer highPassOutputState;
+    struct Branch {
+        explicit Branch(int samples, int blockSamples);
+        mixxx::SampleBuffer delay;
+        mixxx::SampleBuffer work;
+        double delayFrames = 0;
+        double nextDelayFrames = 0;
+        double requestedDelayFrames = 0;
+        int fadeRemaining = 0;
+        float send = 0;
+        float targetSend = 0;
+        float sendStep = 0;
+        int sendRemaining = 0;
+        float feedback = 0;
+    };
+    int color = 127;
+    int controlCountdown = 0;
+    int writeFrame = 0;
+    std::array<Branch, 2> branches;
+    std::unique_ptr<EngineFilterBiquad1Band> leftPre;
+    std::unique_ptr<EngineFilterBiquad1High> rightPre;
+    std::unique_ptr<EngineFilterBiquad1Low> rightPost;
 };
 
 class ColorDubEchoEffect : public EffectProcessorImpl<ColorDubEchoGroupState> {

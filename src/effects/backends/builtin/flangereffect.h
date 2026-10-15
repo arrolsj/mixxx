@@ -6,15 +6,14 @@
 #include "util/class.h"
 #include "util/rampingvalue.h"
 #include "util/sample.h"
+#include "util/samplebuffer.h"
 #include "util/types.h"
 
 namespace {
-constexpr double kMaxDelayMs = 13.0;
-constexpr double kMinDelayMs = 0.22;
+constexpr double kMaxDelayMs = 2.6666667461395264;
+constexpr double kMinDelayMs = 0.0;
 constexpr double kCenterDelayMs = (kMaxDelayMs - kMinDelayMs) / 2 + kMinDelayMs;
 constexpr double kMaxLfoWidthMs = kMaxDelayMs - kMinDelayMs;
-// using + 1.0 instead of ceil() for Mac OS
-constexpr SINT kBufferLenth = static_cast<SINT>(kMaxDelayMs + 1.0) * 96; // for 96 kHz
 constexpr double kMinLfoBeats = 1 / 4.0;
 constexpr double kMaxLfoBeats = 32.0;
 } // anonymous namespace
@@ -22,6 +21,8 @@ constexpr double kMaxLfoBeats = 32.0;
 struct FlangerGroupState : public EffectState {
     FlangerGroupState(const mixxx::EngineParameters& engineParameters)
             : EffectState(engineParameters),
+              delayLeft(static_cast<int>((kMaxDelayMs + 1.0) * engineParameters.sampleRate() / 1000)),
+              delayRight(delayLeft.size()),
               delayPos(0),
               lfoFrames(0),
               previousPeriodFrames(-1),
@@ -29,13 +30,13 @@ struct FlangerGroupState : public EffectState {
               prev_mix(0),
               prev_width(0),
               prev_manual(static_cast<CSAMPLE_GAIN>(kCenterDelayMs)) {
-        SampleUtil::clear(delayLeft, kBufferLenth);
-        SampleUtil::clear(delayRight, kBufferLenth);
+        delayLeft.clear();
+        delayRight.clear();
     }
     ~FlangerGroupState() override = default;
 
-    CSAMPLE delayLeft[kBufferLenth];
-    CSAMPLE delayRight[kBufferLenth];
+    mixxx::SampleBuffer delayLeft;
+    mixxx::SampleBuffer delayRight;
     unsigned int delayPos;
     unsigned int lfoFrames;
     double previousPeriodFrames;
@@ -43,6 +44,13 @@ struct FlangerGroupState : public EffectState {
     CSAMPLE_GAIN prev_mix;
     CSAMPLE_GAIN prev_width;
     CSAMPLE_GAIN prev_manual;
+    double targetWidth = -1;
+    double targetManual = -1;
+    double widthStep = 0;
+    double manualStep = 0;
+    int widthRemaining = 0;
+    int manualRemaining = 0;
+    float outputGain = 1;
 };
 
 class FlangerEffect : public EffectProcessorImpl<FlangerGroupState> {

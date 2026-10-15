@@ -5,6 +5,7 @@
 
 #include "effects/backends/builtin/colordubechoeffect.h"
 #include "effects/backends/builtin/colornoiseeffect.h"
+#include "effects/backends/builtin/flangereffect.h"
 #include "effects/backends/effectmanifest.h"
 #include "engine/effects/engineeffectparameter.h"
 #include "engine/effects/groupfeaturestate.h"
@@ -20,17 +21,19 @@ constexpr double kPi = 3.14159265358979323846;
 template<typename Effect, typename State>
 class ColorFxHarness {
   public:
-    ColorFxHarness()
-            : m_engineParameters(kSampleRate, kFramesPerBuffer),
+    ColorFxHarness(int sampleRate = 48000, int framesPerBuffer = kFramesPerBuffer)
+            : m_engineParameters(mixxx::audio::SampleRate(sampleRate), framesPerBuffer),
               m_pManifest(Effect::getManifest()),
               m_pColor(new EngineEffectParameter(
                       m_pManifest->parameters().first())),
               m_state(m_engineParameters),
               m_input(m_engineParameters.samplesPerBuffer()),
               m_output(m_engineParameters.samplesPerBuffer()) {
-        QMap<QString, EngineEffectParameterPointer> parameters;
-        parameters.insert(m_pColor->id(), m_pColor);
-        m_effect.loadEngineEffectParameters(parameters);
+        for (const auto& manifest : m_pManifest->parameters()) {
+            m_parameters.insert(manifest->id(), manifest->id() == m_pColor->id() ?
+                    m_pColor : EngineEffectParameterPointer(new EngineEffectParameter(manifest)));
+        }
+        m_effect.loadEngineEffectParameters(m_parameters);
     }
 
     SINT samplesPerBuffer() const {
@@ -49,13 +52,17 @@ class ColorFxHarness {
         m_features.beat_length = GroupFeatureBeatLength{seconds, 1.0};
     }
 
-    void process(double color) {
+    void setParameter(const QString& id, double value) {
+        m_parameters.value(id)->setValue(value);
+    }
+
+    void process(double color, EffectEnableState enable = EffectEnableState::Enabled) {
         m_pColor->setValue(color);
         m_effect.processChannel(&m_state,
                 m_input.data(),
                 m_output.data(),
                 m_engineParameters,
-                EffectEnableState::Enabled,
+                enable,
                 m_features);
     }
 
@@ -65,6 +72,7 @@ class ColorFxHarness {
     EngineEffectParameterPointer m_pColor;
     Effect m_effect;
     State m_state;
+    QMap<QString, EngineEffectParameterPointer> m_parameters;
     GroupFeatureState m_features;
     mixxx::SampleBuffer m_input;
     mixxx::SampleBuffer m_output;
@@ -72,6 +80,7 @@ class ColorFxHarness {
 
 using DubEchoHarness = ColorFxHarness<ColorDubEchoEffect, ColorDubEchoGroupState>;
 using NoiseHarness = ColorFxHarness<ColorNoiseEffect, ColorNoiseGroupState>;
+using FlangerHarness = ColorFxHarness<FlangerEffect, FlangerGroupState>;
 
 void fillSine(CSAMPLE* pBuffer, SINT samples, SINT* pFrame) {
     for (SINT i = 0; i < samples; i += mixxx::kEngineChannelCount) {
@@ -128,11 +137,14 @@ TEST(ColorFxEffectTest, DubEchoCenterIsBitExactDry) {
     }
 }
 
-TEST(ColorFxEffectTest, DubEchoRepeatsAfterThreeQuartersOfABeat) {
+TEST(ColorFxEffectTest, DubEchoUsesDefaultMillisecondsAndKeepsStereoSeparate) {
     for (const double color : {0.0, 1.0}) {
-        DubEchoHarness harness;
+      for (const int sampleRate : {44100, 48000, 96000}) {
+        DubEchoHarness harness(sampleRate);
         harness.setBeatLengthSeconds(0.5);
-        const SINT delayFrames = static_cast<SINT>(0.75 * 0.5 * kSampleRate);
+        const SINT delayFrames = static_cast<SINT>((color == 0 ? 0.189 : 0.150) * sampleRate);
+        SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+        for (int warmup = 0; warmup < 50; ++warmup) harness.process(color);
         const SINT impulseFrames = 64;
         SINT frame = 0;
         SINT firstEchoFrame = -1;
@@ -142,7 +154,7 @@ TEST(ColorFxEffectTest, DubEchoRepeatsAfterThreeQuartersOfABeat) {
                     i += mixxx::kEngineChannelCount) {
                 const CSAMPLE value = frame++ < impulseFrames ? 0.5f : 0.0f;
                 harness.input()[i] = value;
-                harness.input()[i + 1] = value;
+                harness.input()[i + 1] = 0;
             }
             harness.process(color);
             for (SINT i = 0; i < harness.samplesPerBuffer();
@@ -150,7 +162,8 @@ TEST(ColorFxEffectTest, DubEchoRepeatsAfterThreeQuartersOfABeat) {
                 const SINT outputFrame = bufferStart + i / mixxx::kEngineChannelCount;
                 const CSAMPLE wet = harness.output()[i] - harness.input()[i];
                 ASSERT_TRUE(std::isfinite(wet));
-                if (outputFrame < delayFrames) {
+                ASSERT_EQ(harness.output()[i + 1], 0);
+                if (outputFrame < delayFrames - 1) {
                     ASSERT_EQ(wet, 0.0f) << "early echo at frame " << outputFrame;
                 } else if (firstEchoFrame < 0 && wet != 0.0f) {
                     firstEchoFrame = outputFrame;
@@ -159,9 +172,74 @@ TEST(ColorFxEffectTest, DubEchoRepeatsAfterThreeQuartersOfABeat) {
         }
         // The color ramps away from the dry center during the first buffer,
         // so the earliest frames may send almost nothing into the delay.
-        EXPECT_GE(firstEchoFrame, delayFrames) << "color " << color;
-        EXPECT_LT(firstEchoFrame, delayFrames + kFramesPerBuffer) << "color " << color;
+        EXPECT_GE(firstEchoFrame, delayFrames - 1) << "color " << color;
+        EXPECT_LE(firstEchoFrame, delayFrames + 1) << "color " << color;
+      }
     }
+}
+
+TEST(ColorFxEffectTest, DubEchoCenterRetainsTailAndIgnoresTempo) {
+    DubEchoHarness a, b;
+    a.setBeatLengthSeconds(0.25);
+    b.setBeatLengthSeconds(1.0);
+    SINT frame = 0;
+    for (int block = 0; block < 80; ++block) {
+        fillSine(a.input(), a.samplesPerBuffer(), &frame);
+        SampleUtil::copy(b.input(), a.input(), a.samplesPerBuffer());
+        a.process(1); b.process(1);
+        for (int i = 0; i < a.samplesPerBuffer(); ++i) ASSERT_EQ(a.output()[i], b.output()[i]);
+    }
+    SampleUtil::clear(a.input(), a.samplesPerBuffer());
+    double tail = 0;
+    for (int block = 0; block < 50; ++block) {
+        a.process(0.5);
+        if (block > 20) {
+            for (int i = 0; i < a.samplesPerBuffer(); ++i) tail += std::abs(a.output()[i]);
+        }
+    }
+    EXPECT_GT(tail, 0.001);
+    a.process(0.5, EffectEnableState::Disabling);
+    a.process(0.5);
+    for (int i = 0; i < a.samplesPerBuffer(); ++i) EXPECT_NEAR(a.output()[i], 0, 1e-7);
+}
+
+TEST(ColorFxEffectTest, DubEchoHasOnlyOneExternalParameter) {
+    const auto parameters = ColorDubEchoEffect::getManifest()->parameters();
+    ASSERT_EQ(parameters.size(), 1);
+    EXPECT_EQ(parameters.first()->id(), QStringLiteral("color"));
+}
+
+TEST(ColorFxEffectTest, FlangerLinearFeedbackAndFractionalDelay) {
+    for (double manual : {1.0, 1.01}) {
+        FlangerHarness harness;
+        harness.setParameter("width", 0);
+        harness.setParameter("manual", manual);
+        harness.setParameter("regen", 0.266666591);
+        SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+        for (int warmup = 0; warmup < 20; ++warmup) harness.process(0.75);
+        harness.input()[0] = 2;
+        harness.process(0.75);
+        EXPECT_NEAR(harness.output()[0], 1.5, 1e-6);
+        const double frac = manual * 48 - 48;
+        EXPECT_NEAR(harness.output()[48 * 2], 1.5 * (1 - frac), 1e-5);
+        EXPECT_NEAR(harness.output()[49 * 2], 1.5 * frac, 1e-5);
+        if (manual == 1.0) EXPECT_NEAR(harness.output()[96 * 2], 1.5 * 0.266666591, 1e-5);
+        for (int i = 1; i < harness.samplesPerBuffer(); i += 2) ASSERT_EQ(harness.output()[i], 0);
+    }
+}
+
+TEST(ColorFxEffectTest, FlangerDryAndDisableReset) {
+    FlangerHarness harness;
+    harness.setParameter("mix", 0);
+    SINT frame = 0;
+    fillSine(harness.input(), harness.samplesPerBuffer(), &frame);
+    harness.process(0.75);
+    for (int i = 0; i < harness.samplesPerBuffer(); ++i) ASSERT_EQ(harness.output()[i], harness.input()[i]);
+    harness.process(0.75, EffectEnableState::Disabling);
+    SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+    harness.setParameter("mix", 1);
+    harness.process(0.75);
+    for (int i = 0; i < harness.samplesPerBuffer(); ++i) ASSERT_EQ(harness.output()[i], 0);
 }
 
 } // namespace
