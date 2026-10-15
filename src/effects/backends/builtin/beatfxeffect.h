@@ -44,7 +44,8 @@ class SpiralState : public EffectState {
     bool hasTail() const override { return tailFrames>0; }
     mixxx::SampleBuffer history, pitch;
     int write=0, pitchWrite=0, tailFrames=0;
-    double fs=0, delay=0, velocity=0, jitter=0;
+    double fs=0, delay=0, velocity=0, acceleration=0, desiredVelocity=0;
+    float jitter=0;
     bool jitterUp=true;
     float peak=0;
     performance_fx::Ramp inputGain,dry,wet;

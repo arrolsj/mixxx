@@ -31,7 +31,7 @@ void capture(RollState* s) {
 
 BeatDelayState::BeatDelayState(const mixxx::EngineParameters& p)
         : EffectState(p),history(capacity(p)*2) {
-    history.clear();inputGain.value=inputGain.target=dry.value=dry.target=1;
+    history.clear();dry.value=dry.target=1;
 }
 QString BeatEchoEffect::getId() { return QStringLiteral("org.mixxx.effects.beatecho"); }
 QString BeatDelayEffect::getId() { return QStringLiteral("org.mixxx.effects.beatdelay"); }
@@ -44,12 +44,15 @@ void BeatEchoEffect::processChannel(BeatDelayState* s,const CSAMPLE* input,CSAMP
         const mixxx::EngineParameters& p,EffectEnableState enable,const GroupFeatureState& features) {
     const double fs=p.sampleRate();const int frames=s->history.size()/2,ramp=rampFrames(fs);
     const bool on=enabled(enable);const auto gains=mix(m_depth->value());
+    s->requested=static_cast<int>(std::lround(periodFrames(m_time->value(),fs,features,frames)));
+    if(s->delay==0) {
+        s->delay=s->requested;
+        if(!m_echo) s->inputGain.value=s->inputGain.target=1;
+    }
     s->dc.configure(fs);
     s->inputGain.set(on || !m_echo ? 1 : 0,ramp);
     s->dry.set(on ? gains[0] : 1,ramp);
     s->wet.set(on || m_echo ? gains[1] : 0,ramp);
-    s->requested=static_cast<int>(std::lround(periodFrames(m_time->value(),fs,features,frames)));
-    if(s->delay==0) s->delay=s->requested;
     for(int f=0;f<p.framesPerBuffer();++f) {
         if(s->phase==0 && s->requested!=s->delay) { s->phase=-1;s->fadeRemaining=ramp; }
         if(s->phase) {
@@ -104,28 +107,48 @@ void SpiralEffect::processChannel(SpiralState* s,const CSAMPLE* input,CSAMPLE* o
     // Default Spiral's wet path is unity at depth=.5.
     s->wet.set(static_cast<float>(std::min(1.0,m_depth->value()*2)),ramp);
     const int pitchFrames=s->pitch.size()/2;
+    // The native mode-0 controller updates once per callback. Positive and
+    // negative changes use different acceleration constants; near the target
+    // the remaining distance determines braking rather than a fixed ramp.
+    float error=static_cast<float>(target)-static_cast<float>(s->delay);
+    if(error>1) {
+        const float bound=static_cast<float>(static_cast<int>(fs*4));
+        error=std::min(error,bound);
+        if(s->velocity>.01 && error<fs*.0010000000474974513) {
+            s->desiredVelocity=.01;
+            s->acceleration=(.01-s->velocity)/error;
+        } else {
+            const double r=error/bound;
+            s->desiredVelocity=.01+.20000000298023224*(1-std::pow(1-r,3));
+            s->acceleration=(s->desiredVelocity-s->velocity)*static_cast<float>(.5/fs);
+        }
+    } else if(error< -1) {
+        const float bound=static_cast<float>(static_cast<int>(-fs*2));
+        error=std::max(error,bound);
+        if(s->velocity< -.01 && error> -fs*.0010000000474974513) {
+            s->desiredVelocity=-.01;
+            s->acceleration=(s->velocity+.01)/error;
+        } else {
+            const double r=error/bound;
+            s->desiredVelocity=-.01-.40156862139701843*(1-std::pow(1-r,3));
+            s->acceleration=(s->desiredVelocity-s->velocity)*static_cast<float>((10.0/3)/fs);
+        }
+    }
+    if(s->velocity> -.011 && s->velocity<.011 && error> -1 && error<1) {
+        s->delay=target;s->velocity=0;s->acceleration=0;s->desiredVelocity=0;
+    }
     for(int f=0;f<p.framesPerBuffer();++f) {
         const float send=s->inputGain.next(),dry=s->dry.next(),wet=s->wet.next();
         s->peak=std::max(s->peak,std::abs((input[2*f]+input[2*f+1])*.5f*send));
         const float limit=.6f*s->peak;
-        const double error=target-s->delay;
-        double desired=0;
-        if(std::abs(error)>1) {
-            const double r=std::min(1.0,std::abs(error)/(fs*(error>0 ? 4 : 2)));
-            desired=(error>0 ? .01+.2*(1-std::pow(1-r,3)) : -.01-.40156862139701843*(1-std::pow(1-r,3)));
-            // Brake before crossing the target; never snap a distant read head.
-            if(std::abs(error)<std::abs(s->velocity)*fs*.01) desired=error/(fs*.01);
-        }
-        const double acceleration=(desired-s->velocity)*.5/fs;
-        const double oldDelay=s->delay;
         s->delay=std::max(fs*.001,s->delay+s->velocity);
-        s->velocity=std::clamp(s->velocity+acceleration,-2.0,.8);
-        if((target-oldDelay)*(target-s->delay)<=0 || (std::abs(error)<1 && std::abs(s->velocity)<.001)) {
-            s->delay=target;s->velocity=0;
-        }
-        s->jitter+=(s->jitterUp ? 1 : -1)/24000.0;
-        const double jitterLimit=fs/96000;
-        if(std::abs(s->jitter)>=jitterLimit) { s->jitter=std::clamp(s->jitter,-jitterLimit,jitterLimit);s->jitterUp=!s->jitterUp; }
+        s->velocity=std::clamp(s->velocity+s->acceleration,-2.0,.8);
+        if((s->acceleration>0 && s->velocity>=s->desiredVelocity) ||
+                (s->acceleration<=0 && s->velocity<=s->desiredVelocity)) s->acceleration=0;
+        s->jitter+=(s->jitterUp ? 1.0f : -1.0f)/24000.0f;
+        const float jitterLimit=static_cast<float>(fs/96000);
+        if(s->jitter>jitterLimit) { s->jitter=2*jitterLimit-s->jitter;s->jitterUp=false; }
+        else if(s->jitter< -jitterLimit) { s->jitter=-2*jitterLimit-s->jitter;s->jitterUp=true; }
         float activity=0;
         for(int c=0;c<2;++c) {
             const int i=2*f+c;
@@ -144,6 +167,9 @@ void SpiralEffect::processChannel(SpiralState* s,const CSAMPLE* input,CSAMPLE* o
         else if(s->tailFrames>0) --s->tailFrames;
         s->write=(s->write+1)%frames;s->pitchWrite=(s->pitchWrite+1)%pitchFrames;
     }
+    s->delay=static_cast<float>(s->delay);
+    s->velocity=static_cast<float>(s->velocity);
+    s->acceleration=static_cast<float>(s->acceleration);
 }
 
 RollState::RollState(const mixxx::EngineParameters& p)

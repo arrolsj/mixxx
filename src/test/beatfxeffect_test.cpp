@@ -132,6 +132,20 @@ TEST(BeatFxEffectTest, OffEchoRetainsTailWhileOffDelayIsDry) {
     EXPECT_TRUE(echo.state.hasTail());
 }
 
+TEST(BeatFxEffectTest, LoadingDisabledEchoDoesNotCreatePhantomRepeats) {
+    Echo h; h.set("delay_time", .125);
+    for (int b = 0; b < 4; ++b) {
+        for (int i = 0; i < h.input.size(); ++i) h.input[i] = .2f;
+        h.process(EffectEnableState::Disabled);
+        for (int i = 0; i < h.input.size(); ++i) EXPECT_EQ(h.output[i], h.input[i]);
+    }
+    h.input.clear();
+    for (int b = 0; b < 40; ++b) {
+        h.process(EffectEnableState::Disabled); EXPECT_EQ(h.peak(), 0);
+    }
+    EXPECT_FALSE(h.state.hasTail());
+}
+
 TEST(BeatFxEffectTest, SpiralAddsDefaultPitchLatencyAndRetainsOffTail) {
     Spiral h(48000, 257); h.set("delay_time", .125);
     for (int b = 0; b < 8; ++b) h.process();
@@ -157,6 +171,23 @@ TEST(BeatFxEffectTest, SpiralTimeChangeMovesReadHeadInsteadOfSnapping) {
         ASSERT_GE(h.state.delay, 48); ASSERT_LE(h.state.velocity, .8);
     }
     EXPECT_NEAR(h.state.delay, 6000, 1);
+}
+
+TEST(BeatFxEffectTest, SpiralUsesNativeShorteningAccelerationAndNearTargetBrakes) {
+    Spiral h;
+    h.process(); h.set("delay_time", .25); h.process();
+    // Mode-0 48 kHz trace calculated from the sealed native instructions:
+    // error=-18000, target speed=-.1961764678, shortening coefficient=10/(3*fs).
+    EXPECT_NEAR(h.state.delay, 23999.552734375, .002);
+    EXPECT_NEAR(h.state.velocity, -.0035012050066143274, 1e-8);
+    for (const double direction : {-1.0, 1.0}) {
+        Spiral brake(48000, 1); brake.process();
+        brake.state.delay = 24000 - direction * 20;
+        brake.state.velocity = direction * .1;
+        brake.process();
+        EXPECT_NEAR(brake.state.velocity, direction * .0955, 1e-7);
+        EXPECT_NEAR(brake.state.desiredVelocity, direction * .01, 1e-9);
+    }
 }
 
 TEST(BeatFxEffectTest, RollLoopsFullBeatThroughPauseAndClearsOnRetrigger) {
