@@ -3,6 +3,7 @@
 #include <QMap>
 #include <cmath>
 
+#include "control/controlobject.h"
 #include "effects/backends/builtin/colordubechoeffect.h"
 #include "effects/backends/builtin/colornoiseeffect.h"
 #include "effects/backends/builtin/flangereffect.h"
