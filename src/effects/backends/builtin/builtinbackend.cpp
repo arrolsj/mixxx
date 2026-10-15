@@ -24,6 +24,7 @@
 #include "effects/backends/builtin/compressoreffect.h"
 #include "effects/backends/builtin/distortioneffect.h"
 #include "effects/backends/builtin/echoeffect.h"
+#include "effects/backends/builtin/beatfxeffect.h"
 #include "effects/backends/builtin/glitcheffect.h"
 #include "effects/backends/builtin/loudnesscontoureffect.h"
 #include "effects/backends/builtin/metronomeeffect.h"
@@ -59,6 +60,10 @@ BuiltInBackend::BuiltInBackend() {
     // Fancy effects
     registerEffect<FlangerEffect>();
     registerEffect<EchoEffect>();
+    registerEffect<BeatDelayEffect>();
+    registerEffect<BeatEchoEffect>();
+    registerEffect<SpiralEffect>();
+    registerEffect<RollEffect>();
     registerEffect<AutoPanEffect>();
 #ifndef __MACAPPSTORE__
     registerEffect<ReverbEffect>();

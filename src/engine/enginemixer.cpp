@@ -297,7 +297,9 @@ void EngineMixer::processChannels(int iBufferSize) {
         }
 
         EngineChannel::ActiveState activeState = pChannel->updateActiveState();
-        if (activeState == EngineChannel::ActiveState::Inactive) {
+        if (activeState == EngineChannel::ActiveState::Inactive &&
+                (!m_pEngineEffectsManager ||
+                        !m_pEngineEffectsManager->hasTail(pChannelInfo->m_handle))) {
             continue;
         }
 

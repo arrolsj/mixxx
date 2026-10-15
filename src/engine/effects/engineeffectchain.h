@@ -44,6 +44,8 @@ class EngineEffectChain final : public EffectsRequestHandler {
             const mixxx::audio::SampleRate sampleRate,
             const GroupFeatureState& groupFeatures,
             bool fadeout);
+    bool hasTail(ChannelHandle input) const;
+    bool processesWhilePaused(ChannelHandle input) const;
 
   private:
     struct ChannelStatus {

@@ -155,6 +155,7 @@ bool EngineEffect::process(const ChannelHandle& inputHandle,
     // If the EngineEffect is fully disabled, do not let
     // intermediate enabling/disabling signals from the chain override
     // the EngineEffect's state.
+    const bool continuous = m_pProcessor->processesWhileDisabled();
     if (effectiveEffectEnableState != EffectEnableState::Disabled) {
         if (chainEnableState == EffectEnableState::Disabled) {
             // If the chain is fully disabled, skip calling the EffectProcessor.
@@ -178,7 +179,9 @@ bool EngineEffect::process(const ChannelHandle& inputHandle,
 
     bool processingOccured = false;
 
-    if (effectiveEffectEnableState != EffectEnableState::Disabled) {
+    if (effectiveEffectEnableState != EffectEnableState::Disabled ||
+            (continuous && (chainEnableState == EffectEnableState::Enabled ||
+                                  chainEnableState == EffectEnableState::Enabling))) {
         //TODO: refactor rest of audio engine to use mixxx::AudioParameters
         const mixxx::EngineParameters engineParameters(
                 sampleRate,
@@ -194,7 +197,9 @@ bool EngineEffect::process(const ChannelHandle& inputHandle,
 
         processingOccured = true;
 
-        if (!m_effectRampsFromDry) {
+        if (continuous && chainEnableState == EffectEnableState::Disabling) {
+            SampleUtil::linearCrossfadeBuffersOut(pOutput, pInput, numSamples);
+        } else if (!m_effectRampsFromDry) {
             // the effect does not fade, so we care for it
             if (effectiveEffectEnableState == EffectEnableState::Disabling) {
                 DEBUG_ASSERT(pInput != pOutput); // Fade to dry only works if pInput is not touched by pOutput

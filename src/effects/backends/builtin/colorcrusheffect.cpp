@@ -1,84 +1,51 @@
 #include "effects/backends/builtin/colorcrusheffect.h"
 
-#include <algorithm>
-#include <cmath>
-
-#include "effects/backends/effectmanifest.h"
 #include "engine/effects/engineeffectparameter.h"
-#include "engine/filters/enginefilterbiquad1.h"
-#include "util/rampingvalue.h"
-#include "util/sample.h"
 
 namespace {
 const QString kColorParameterId = QStringLiteral("color");
 constexpr double kCenter = 0.5;
-constexpr double kMinimumHighPass = 20.0;
-constexpr double kMaximumHighPass = 6000.0;
-constexpr double kFilterQ = 0.707106781;
-constexpr int kCrushStart = 144;
-
-double highPassForAmount(double amount) {
-    const double clampedAmount = std::clamp(amount, 0.0, 1.0);
-    return std::exp(std::log(kMinimumHighPass) +
-            clampedAmount * std::log(kMaximumHighPass / kMinimumHighPass));
+// PARAM is fixed at its default (128), where the optional mantissa mask is bypassed.
+constexpr std::array<int, 128> kHighPassHz = {
+        20,20,22,23,24,25,26,27,28,30,31,32,34,35,37,38,
+        40,42,44,46,48,50,52,54,57,59,62,64,67,70,73,77,
+        80,84,87,91,95,99,104,108,113,118,123,129,135,141,147,153,
+        160,167,175,182,190,199,208,217,226,236,247,258,269,281,294,307,
+        320,334,349,365,381,398,415,434,453,473,494,516,539,563,587,613,
+        641,669,699,730,762,796,831,868,906,946,988,1032,1078,1125,1175,1227,
+        1281,1338,1398,1459,1524,1592,1662,1736,1812,1893,1977,2064,2156,2251,2351,2455,
+        2563,2677,2796,2919,3049,3184,3325,3472,3626,3786,3954,4129,4129,4129,4129,4129};
 }
 
-CSAMPLE applySteppedMask(CSAMPLE sample, int color) {
-    if (color <= kCrushStart) {
-        return sample;
-    }
-    // Rekordbox advances the mask in seven discrete steps rather than
-    // continuously reducing bit depth.
-    const int discardedBits = std::clamp(((8 * color - 1024) >> 7), 1, 7);
-    const int bitDepth = 16 - discardedBits;
-    const CSAMPLE scale = static_cast<CSAMPLE>(1 << (bitDepth - 1));
-    return std::round(SampleUtil::clampSample(sample) * scale) / scale;
+ColorCrushGroupState::ColorCrushGroupState(const mixxx::EngineParameters& parameters)
+        : EffectState(parameters) {
 }
-} // namespace
-
-ColorCrushGroupState::ColorCrushGroupState(
-        const mixxx::EngineParameters& engineParameters)
-        : EffectState(engineParameters),
-          previousColor(kCenter),
-          highPassCutoff(kMinimumHighPass),
-          previousLeftAmount(0.0),
-          crushedBuffer(engineParameters.samplesPerBuffer()),
-          filteredBuffer(engineParameters.samplesPerBuffer()),
-          highPassFilter(std::make_unique<EngineFilterBiquad1High>(
-                  engineParameters.sampleRate(), kMinimumHighPass, kFilterQ, true)) {
-}
-
-ColorCrushGroupState::~ColorCrushGroupState() = default;
 
 QString ColorCrushEffect::getId() {
     return QStringLiteral("org.mixxx.effects.colorcrush");
 }
 
 EffectManifestPointer ColorCrushEffect::getManifest() {
-    EffectManifestPointer pManifest(new EffectManifest());
-    pManifest->setId(getId());
-    pManifest->setName(QObject::tr("Color Crush"));
-    pManifest->setShortName(QObject::tr("Color Crush"));
-    pManifest->setAuthor("The LastCUE Box Team");
-    pManifest->setVersion("2.0");
-    pManifest->setDescription(QObject::tr(
-            "Rekordbox-style crush with high-pass color and stepped bit masking"));
-    pManifest->setEffectRampsFromDry(true);
-    pManifest->setMetaknobDefault(kCenter);
-
-    EffectManifestParameterPointer color = pManifest->addParameter();
+    EffectManifestPointer manifest(new EffectManifest());
+    manifest->setId(getId());
+    manifest->setName(QObject::tr("Color Crush"));
+    manifest->setShortName(QObject::tr("Color Crush"));
+    manifest->setAuthor("The LastCUE Box Team");
+    manifest->setVersion("3.0");
+    manifest->setDescription(QObject::tr("Stereo sample hold with high-pass color"));
+    manifest->setEffectRampsFromDry(true);
+    manifest->setMetaknobDefault(kCenter);
+    auto color = manifest->addParameter();
     color->setId(kColorParameterId);
     color->setName(QObject::tr("Color"));
     color->setShortName(QObject::tr("Color"));
-    color->setDescription(QObject::tr(
-            "High-pass filtering increases left; stepped crushing increases right"));
+    color->setDescription(QObject::tr("Sample hold in both directions; high-pass increases right"));
     color->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
     color->setUnitsHint(EffectManifestParameter::UnitsHint::Unknown);
     color->setDefaultLinkType(EffectManifestParameter::LinkType::Linked);
     color->setNeutralPointOnScale(kCenter);
     color->setRange(0.0, kCenter, 1.0);
-
-    return pManifest;
+    return manifest;
 }
 
 void ColorCrushEffect::loadEngineEffectParameters(
@@ -86,75 +53,46 @@ void ColorCrushEffect::loadEngineEffectParameters(
     m_pColorParameter = parameters.value(kColorParameterId);
 }
 
-void ColorCrushEffect::processChannel(
-        ColorCrushGroupState* pState,
-        const CSAMPLE* pInput,
-        CSAMPLE* pOutput,
-        const mixxx::EngineParameters& engineParameters,
-        EffectEnableState enableState,
-        const GroupFeatureState& groupFeatures) {
-    Q_UNUSED(groupFeatures);
-
-    const auto requestedColor = m_pColorParameter
-            ? std::clamp(m_pColorParameter->value(), 0.0, 1.0)
-            : kCenter;
-    const auto targetColor = enableState == EffectEnableState::Disabling
-            ? kCenter
-            : requestedColor;
-    const int targetColorByte = static_cast<int>(std::round(targetColor * 255.0));
-    const double targetLeftAmount = targetColorByte < 124
-            ? (124.0 - targetColorByte) / 124.0
-            : 0.0;
-
-    RampingValue<CSAMPLE_GAIN> colorRamp(
-            pState->previousColor, targetColor, engineParameters.samplesPerBuffer());
-    const int channelCount = engineParameters.channelCount();
-    for (SINT i = 0; i < engineParameters.samplesPerBuffer(); i += channelCount) {
-        const CSAMPLE_GAIN color = colorRamp.getNth(i);
-        const int value = static_cast<int>(std::round(color * 255.0));
-        const CSAMPLE_GAIN rightAmount = value > kCrushStart
-                ? static_cast<CSAMPLE_GAIN>(value - kCrushStart) /
-                        (255 - kCrushStart)
-                : 0.0f;
-        for (int channel = 0; channel < channelCount; ++channel) {
-            const CSAMPLE dry = pInput[i + channel];
-            const CSAMPLE masked = applySteppedMask(dry, value);
-            pState->crushedBuffer[i + channel] =
-                    dry + (masked - dry) * rightAmount;
+void ColorCrushEffect::processChannel(ColorCrushGroupState* s,
+        const CSAMPLE* input, CSAMPLE* output,
+        const mixxx::EngineParameters& p, EffectEnableState enable,
+        const GroupFeatureState& features) {
+    Q_UNUSED(features);
+    const double fs = p.sampleRate();
+    const double color = performance_fx::enabled(enable) && m_pColorParameter
+            ? std::clamp(m_pColorParameter->value(), 0.0, 1.0) : kCenter;
+    const int target = static_cast<int>(std::round(color * 255));
+    const int interval = std::max(1, static_cast<int>(std::round(fs / 3000)));
+    s->wet.set(color == kCenter ? 0 : 1, performance_fx::rampFrames(fs));
+    for (SINT frame = 0; frame < p.framesPerBuffer(); ++frame) {
+        if (s->countdown <= 0) {
+            s->color += (target > s->color) - (target < s->color);
+            s->countdown = interval;
+        }
+        --s->countdown;
+        const int code = std::max(0, 2 * s->color - 255);
+        if (s->filterCode != code || s->sampleRate != fs) {
+            const float resonance = code <= 3 ? 0 : static_cast<float>(
+                    1.299829006 * (1 - std::pow(1 - (code - 3) / 252.0, 16)));
+            s->highPass.configure(fs, kHighPassHz[code >> 1], true, resonance);
+            s->filterCode = code;
+            s->sampleRate = fs;
+        }
+        if (s->phase < 1) {
+            s->held = {input[2 * frame], input[2 * frame + 1]};
+            const double holdMs = std::min(0.5, std::abs(2 * s->color / 255.0 - 1) * 0.5);
+            s->phase += static_cast<float>(holdMs * fs * 0.001);
+        } else {
+            s->phase -= 1;
+        }
+        const float filterDry = code <= 3 ? 1 : code > 129 ? 0 :
+                static_cast<float>(std::pow(std::max(0.0, 1 - code / 126.0), 2));
+        const float wet = s->wet.next();
+        for (int c = 0; c < 2; ++c) {
+            const auto filtered = s->highPass.process(s->held[c], c);
+            const float crushed = filterDry * s->held[c] + (1 - filterDry) * filtered;
+            const int i = 2 * frame + c;
+            output[i] = wet == 0 ? input[i] : input[i] + wet * (crushed - input[i]);
         }
     }
-
-    const double targetCutoff = highPassForAmount(targetLeftAmount);
-    if (targetLeftAmount > 0.0) {
-        if (pState->highPassCutoff != targetCutoff) {
-            pState->highPassFilter->setFrequencyCorners(
-                    engineParameters.sampleRate(), targetCutoff, kFilterQ);
-            pState->highPassCutoff = targetCutoff;
-        }
-        pState->highPassFilter->process(pInput,
-                pState->filteredBuffer.data(),
-                engineParameters.samplesPerBuffer());
-    } else if (pState->previousLeftAmount > 0.0) {
-        pState->highPassFilter->processAndPauseFilter(pInput,
-                pState->filteredBuffer.data(),
-                engineParameters.samplesPerBuffer());
-        pState->highPassCutoff = kMinimumHighPass;
-    } else {
-        SampleUtil::copy(pState->filteredBuffer.data(), pInput,
-                engineParameters.samplesPerBuffer());
-    }
-
-    RampingValue<CSAMPLE_GAIN> outputColorRamp(
-            pState->previousColor, targetColor, engineParameters.samplesPerBuffer());
-    for (SINT i = 0; i < engineParameters.samplesPerBuffer(); ++i) {
-        const double value = outputColorRamp.getNth(i) * 255.0;
-        const CSAMPLE_GAIN leftAmount = value < 124.0
-                ? static_cast<CSAMPLE_GAIN>((124.0 - value) / 124.0)
-                : 0.0f;
-        pOutput[i] = pState->crushedBuffer[i] +
-                (pState->filteredBuffer[i] - pState->crushedBuffer[i]) * leftAmount;
-    }
-
-    pState->previousColor = targetColor;
-    pState->previousLeftAmount = targetLeftAmount;
 }

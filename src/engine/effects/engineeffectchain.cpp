@@ -177,6 +177,29 @@ bool EngineEffectChain::disableForInputChannel(ChannelHandle inputHandle) {
     return true;
 }
 
+bool EngineEffectChain::processesWhilePaused(ChannelHandle input) const {
+    if (!m_enableState || !input.valid() || input >= m_chainStatusForChannelMatrix.size()) return false;
+    const auto& outputs = m_chainStatusForChannelMatrix.at(input);
+    bool routed = false;
+    for (const auto& status : outputs) {
+        routed = routed || status.enableState == EffectEnableState::Enabled ||
+                status.enableState == EffectEnableState::Enabling;
+    }
+    if (!routed) return false;
+    for (const auto* effect : m_effects) {
+        if (effect && effect->processesWhileDisabled()) return true;
+    }
+    return false;
+}
+
+bool EngineEffectChain::hasTail(ChannelHandle input) const {
+    if (!processesWhilePaused(input)) return false;
+    for (const auto* effect : m_effects) {
+        if (effect && effect->hasTail(input)) return true;
+    }
+    return false;
+}
+
 bool EngineEffectChain::process(const ChannelHandle& inputHandle,
         const ChannelHandle& outputHandle,
         CSAMPLE* pIn,
@@ -201,7 +224,7 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
     if (channelStatus.enableState == EffectEnableState::Disabling) {
         // Disabled via disableForInputChannel().
         channelStatus.enableState = EffectEnableState::Disabled;
-    } else if (!m_enableState || fadeout) {
+    } else if (!m_enableState || (fadeout && !processesWhilePaused(inputHandle))) {
         if (channelStatus.enableState == EffectEnableState::Enabled) {
             // fadeout is true during the last callback before the track is paused.
             // The track is ramped to zero to avoid clicks.
@@ -248,7 +271,9 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                             pIntermediateOutput,
                             numSamples,
                             sampleRate,
-                            effectiveChainEnableState,
+                            fadeout && !pEffect->processesWhileDisabled() &&
+                                            effectiveChainEnableState == EffectEnableState::Enabled
+                                    ? EffectEnableState::Disabling : effectiveChainEnableState,
                             groupFeatures)) {
                     if (pEffect->getManifest()->addDryToWet()) {
                         // Skip adding the dry signal to the effect's wet output

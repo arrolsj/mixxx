@@ -826,6 +826,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/effects/backends/builtin/colornoiseeffect.cpp
   src/effects/backends/builtin/distortioneffect.cpp
   src/effects/backends/builtin/echoeffect.cpp
+  src/effects/backends/builtin/beatfxeffect.cpp
   src/effects/backends/builtin/filtereffect.cpp
   src/effects/backends/builtin/flangereffect.cpp
   src/effects/backends/builtin/glitcheffect.cpp
@@ -2151,6 +2152,7 @@ if(BUILD_TESTING)
     src/test/chrono_clock_resolution_test.cpp
     src/test/colorconfig_test.cpp
     src/test/colorfxeffect_test.cpp
+    src/test/beatfxeffect_test.cpp
     src/test/colormapperjsproxy_test.cpp
     src/test/colorpalette_test.cpp
     src/test/configobject_test.cpp

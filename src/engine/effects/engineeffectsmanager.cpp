@@ -110,6 +110,13 @@ void EngineEffectsManager::processPreFaderInPlace(const ChannelHandle& inputHand
             featureState);
 }
 
+bool EngineEffectsManager::hasTail(ChannelHandle input) const {
+    for (const auto* chain : m_chainsByStage.value(SignalProcessingStage::Postfader)) {
+        if (chain && chain->hasTail(input)) return true;
+    }
+    return false;
+}
+
 void EngineEffectsManager::processPostFaderInPlace(
         const ChannelHandle& inputHandle,
         const ChannelHandle& outputHandle,

@@ -58,6 +58,7 @@ class EffectState {
         Q_UNUSED(engineParameters);
     };
     virtual ~EffectState(){};
+    virtual bool hasTail() const { return false; }
 };
 
 /// EffectProcessor is an abstract base class for interfacing with an EffectSlot
@@ -67,6 +68,9 @@ class EffectProcessor {
   public:
     virtual ~EffectProcessor() {
     }
+    // Opt-in only: ordinary effects retain their existing enable lifecycle.
+    virtual bool processesWhileDisabled() const { return false; }
+    virtual bool hasTail(ChannelHandle) const { return false; }
 
     /// These methods are called from the main thread
     virtual void initialize(
@@ -119,6 +123,13 @@ class EffectProcessor {
 template<typename EffectSpecificState>
 class EffectProcessorImpl : public EffectProcessor {
   public:
+    bool hasTail(ChannelHandle input) const override {
+        if (!input.valid() || input >= m_channelStateMatrix.size()) return false;
+        for (const auto& state : m_channelStateMatrix.at(input)) {
+            if (state && state->hasTail()) return true;
+        }
+        return false;
+    }
     EffectProcessorImpl() {
     }
     /// Subclasses should not implement their own destructor. All state should

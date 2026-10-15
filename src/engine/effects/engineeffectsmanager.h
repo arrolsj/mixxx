@@ -24,6 +24,7 @@ class EngineEffectsManager final : public EffectsRequestHandler {
     ~EngineEffectsManager() override = default;
 
     void onCallbackStart();
+    bool hasTail(ChannelHandle input) const;
 
     /// Process the prefader EngineEffectChains on the pInOut buffer, modifying
     /// the contents of the input buffer.

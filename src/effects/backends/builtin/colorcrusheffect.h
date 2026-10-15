@@ -1,25 +1,22 @@
 #pragma once
 
-#include <memory>
-
 #include "effects/backends/effectprocessor.h"
+#include "effects/backends/builtin/performancefxdsp.h"
 #include "util/class.h"
 #include "util/samplebuffer.h"
 #include "util/types.h"
 
-class EngineFilterBiquad1High;
-
 class ColorCrushGroupState final : public EffectState {
   public:
     explicit ColorCrushGroupState(const mixxx::EngineParameters& engineParameters);
-    ~ColorCrushGroupState() override;
-
-    CSAMPLE_GAIN previousColor;
-    double highPassCutoff;
-    double previousLeftAmount;
-    mixxx::SampleBuffer crushedBuffer;
-    mixxx::SampleBuffer filteredBuffer;
-    std::unique_ptr<EngineFilterBiquad1High> highPassFilter;
+    int color = 128;
+    int countdown = 0;
+    int filterCode = -1;
+    double sampleRate = 0;
+    float phase = 0;
+    std::array<float, 2> held{};
+    performance_fx::Filter highPass;
+    performance_fx::Ramp wet;
 };
 
 class ColorCrushEffect : public EffectProcessorImpl<ColorCrushGroupState> {

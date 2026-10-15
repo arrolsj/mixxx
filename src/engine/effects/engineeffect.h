@@ -57,6 +57,8 @@ class EngineEffect final : public EffectsRequestHandler {
     SINT getGroupDelayFrames() {
         return m_pProcessor->getGroupDelayFrames();
     }
+    bool processesWhileDisabled() const { return m_pProcessor->processesWhileDisabled(); }
+    bool hasTail(ChannelHandle input) const { return m_pProcessor->hasTail(input); }
 
   private:
     QString debugString() const {
