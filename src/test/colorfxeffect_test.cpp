@@ -15,6 +15,7 @@
 #include "engine/effects/engineeffect.h"
 #include "engine/effects/engineeffectchain.h"
 #include "engine/effects/engineeffectparameter.h"
+#include "engine/effects/engineeffectsmanager.h"
 #include "engine/effects/groupfeaturestate.h"
 #include "engine/engine.h"
 #include "util/samplebuffer.h"
@@ -61,7 +62,16 @@ TEST_F(ColorNoiseSignalPathTest, EmptyDeckNoiseObeysFaderMuteAndPfl) {
     ControlObject::set(ConfigKey(m_sGroup1,"mute"),0);
     slot->setMetaParameter(.5,true); process();
     EXPECT_EQ(peak(m_pEngineMixer->getMainBuffer()),0);
-    slot->setEnabled(false); process();
+    // Use the external CO write used by UI/controllers. setEnabled() writes
+    // through the creator CO, which intentionally suppresses its own signal.
+    ControlObject::set(ConfigKey(slot->getGroup(), "enabled"),0); process();
+    qInfo() << "NOISE_DISABLED_STATE" << ControlObject::get(ConfigKey(slot->getGroup(), "enabled"))
+            << m_pEffectsManager->getEngineEffectsManager()->generatesAudio(m_pChannel1->getHandle())
+            << m_pChannel1->getEngineBuffer()->isTrackReaderIdle()
+            << m_pChannel1->getEngineBuffer()->isTrackLoaded();
+    EXPECT_FALSE(m_pEffectsManager->getEngineEffectsManager()->generatesAudio(m_pChannel1->getHandle()));
+    EXPECT_EQ(peak(m_pEngineMixer->getMainBuffer()),0);
+    EXPECT_EQ(peak(m_pEngineMixer->getHeadphoneBuffer()),0);
     EXPECT_FALSE(m_pChannel1->isActive());
 }
 
