@@ -256,12 +256,21 @@ TEST(ColorFxEffectTest, NoiseBandPassCoefficientsAndFeedbackMatchReference) {
         harness.process(std::min(1.0, (f.code + 0.125)/255.0));
         EXPECT_NEAR(harness.state().bandPassCutoff, f.hz, 1e-6) << f.code;
         // Q at the last code is independently checked below from the snapshot.
-        if (f.code != 255) EXPECT_NEAR(harness.state().bandPassQ, f.q, 1e-10);
+        if (f.code != 255) {
+            EXPECT_NEAR(harness.state().bandPassQ, f.q, 1e-10);
+        }
         EXPECT_NEAR(harness.state().previousFeedback, f.tone, 3e-6) << f.code;
         const double q = harness.state().bandPassQ;
         const double t = std::tan(kPi*f.hz/44100.0);
         const double den = 1+t/q+t*t;
-        const double b = (t/q)/den, a1 = 2*(t*t-1)/den, a2=(1-t/q+t*t)/den;
+        // RKB stores these coefficients as float. Compare the response of that
+        // quantized filter, rather than an ideal double-coefficient filter.
+        const float b = static_cast<float>((t/q)/den);
+        const float a1 = static_cast<float>(2*(t*t-1)/den);
+        const float a2 = static_cast<float>((1-t/q+t*t)/den);
+        EXPECT_EQ(harness.state().b0, b);
+        EXPECT_EQ(harness.state().a1, a1);
+        EXPECT_EQ(harness.state().a2, a2);
         harness.state().filterState = {};
         harness.input()[0] = 1;
         mixxx::SampleBuffer output(harness.samplesPerBuffer());
