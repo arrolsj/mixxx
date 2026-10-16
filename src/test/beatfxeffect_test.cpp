@@ -3,11 +3,20 @@
 #include <QMap>
 #include <cmath>
 #include <vector>
+#include <thread>
+#include <QCoreApplication>
+#include <QDebug>
+#include <QElapsedTimer>
+#include <QThread>
 
 #include "control/controlobject.h"
 #include "effects/backends/builtin/beatfxeffect.h"
 #include "effects/backends/builtin/colorcrusheffect.h"
+#include "effects/backends/builtin/reverbeffect.h"
 #include "effects/backends/effectsbackendmanager.h"
+#include "effects/effectparameter.h"
+#include "effects/effectknobparameterslot.h"
+#include "effects/presets/effectparameterpreset.h"
 #include "engine/effects/engineeffect.h"
 #include "engine/effects/engineeffectchain.h"
 #include "engine/effects/engineeffectparameter.h"
@@ -47,6 +56,82 @@ using Echo = Harness<BeatEchoEffect, BeatDelayState>;
 using Spiral = Harness<SpiralEffect, SpiralState>;
 using Roll = Harness<RollEffect, RollState>;
 using Crush = Harness<ColorCrushEffect, ColorCrushGroupState>;
+using Reverb = Harness<ReverbEffect, ReverbGroupState>;
+
+TEST(BeatFxEffectTest, ReverbUsesReferenceTimeAndOwnsItsDryWetMix) {
+    const auto manifest = ReverbEffect::getManifest();
+    EXPECT_FALSE(manifest->addDryToWet());
+    EXPECT_DOUBLE_EQ(manifest->metaknobDefault(), .5);
+    EXPECT_DOUBLE_EQ(manifest->parameters()[0]->getDefault(), .5);
+    EXPECT_NEAR(ReverbEffect::timeSeconds(0), 1.5318088, 1e-6);
+    EXPECT_NEAR(ReverbEffect::timeSeconds(.5), 8.7009239, 1e-6);
+    EXPECT_NEAR(ReverbEffect::timeSeconds(1), 100.63781, 1e-5);
+    EXPECT_EQ(ReverbEffect::timeSeconds(124./255), ReverbEffect::timeSeconds(131./255));
+    EXPECT_EQ(ReverbEffect::timeSeconds(-1), ReverbEffect::timeSeconds(0));
+    EXPECT_EQ(ReverbEffect::timeSeconds(2), ReverbEffect::timeSeconds(1));
+    for (int i = 0; i <= 1000; ++i) {
+        EXPECT_GT(ReverbEffect::timeSeconds(i/1000.), .8);
+        EXPECT_LE(ReverbEffect::timeSeconds(i/1000.), 101);
+    }
+}
+
+TEST(BeatFxEffectTest, CrossThreadFxParameterWaitsForTheGuiEventQueue) {
+    const QString group = "[FxDispatchProbe]";
+    auto manifest = BeatEchoEffect::getManifest()->parameters()[1];
+    EffectParameterPointer parameter(new EffectParameter(nullptr, {}, manifest, EffectParameterPreset()));
+    EffectKnobParameterSlot slot(group, 0);
+    slot.loadParameter(parameter);
+    const ConfigKey key(group, "parameter1");
+    ASSERT_DOUBLE_EQ(parameter->getValue(), .5);
+    QElapsedTimer timer;
+    timer.start();
+    std::thread controller([&] { ControlObject::set(key, 1); });
+    controller.join();
+    EXPECT_DOUBLE_EQ(ControlObject::get(key), 1);
+    // Deliberately model a busy GUI; the atomic CO already has the new value.
+    QThread::msleep(80);
+    EXPECT_DOUBLE_EQ(parameter->getValue(), .5);
+    QCoreApplication::processEvents();
+    EXPECT_DOUBLE_EQ(parameter->getValue(), 1);
+    qInfo() << "FX_DISPATCH_GUI_GATE_MS" << timer.elapsed();
+}
+
+TEST(BeatFxEffectTest, ReverbFullLevelRemovesDryAndMiddleMatchesReferenceGains) {
+    for (int rate : {44100, 48000, 96000}) {
+        Reverb dry(rate), middle(rate), wet(rate);
+        dry.set("send_amount", 0); middle.set("send_amount", .5); wet.set("send_amount", 1);
+        for (int b = 0; b < 8; ++b) { dry.process(); middle.process(); wet.process(); }
+        dry.input[0] = middle.input[0] = wet.input[0] = .125f;
+        dry.input[1] = middle.input[1] = wet.input[1] = .0625f;
+        for (int b = 0; b < 100; ++b) {
+            dry.process(); middle.process(); wet.process();
+            if (!b) EXPECT_EQ(wet.output[0], 0);
+            for (int i = 0; i < dry.output.size(); ++i) {
+                EXPECT_FLOAT_EQ(dry.output[i], dry.input[i]);
+                EXPECT_NEAR(middle.output[i], dry.input[i] + wet.output[i]*(2.f/3), 1e-6);
+                ASSERT_TRUE(std::isfinite(wet.output[i]));
+            }
+            dry.input.clear(); middle.input.clear(); wet.input.clear();
+        }
+    }
+}
+
+TEST(BeatFxEffectTest, ReverbLevelControlsTheExistingTailWithoutRefillingTheNetwork) {
+    Reverb h(44100, 512);
+    h.set("send_amount", 0);
+    for (int b = 0; b < 90; ++b) {
+        for (int f = 0; f < 512; ++f) {
+            h.input[2*f] = h.input[2*f+1] = .05f*std::sin((b*512+f)*.027);
+        }
+        h.process();
+    }
+    h.input.clear(); h.set("send_amount", 1); h.process();
+    EXPECT_GT(h.peak(), 1e-4);
+    for (int b=0; b<8; ++b) h.process(EffectEnableState::Disabling);
+    EXPECT_EQ(h.peak(), 0);
+    h.process(EffectEnableState::Enabling);
+    EXPECT_EQ(h.peak(), 0);
+}
 
 template<typename H>
 std::vector<float> impulse(int rate, int block, double beats, int total) {

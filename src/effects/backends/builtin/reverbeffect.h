@@ -8,6 +8,7 @@
 #include <QMap>
 
 #include "effects/backends/effectprocessor.h"
+#include "effects/backends/builtin/performancefxdsp.h"
 #include "util/class.h"
 #include "util/types.h"
 
@@ -15,14 +16,14 @@ class ReverbGroupState : public EffectState {
   public:
     ReverbGroupState(const mixxx::EngineParameters& engineParameters)
             : EffectState(engineParameters),
-              sampleRate(engineParameters.sampleRate()),
-              sendPrevious(0) {
+              sampleRate(engineParameters.sampleRate()) {
         reverb.init(sampleRate);
+        dry.value = dry.target = 1;
     }
     ~ReverbGroupState() override = default;
 
     float sampleRate;
-    float sendPrevious;
+    performance_fx::Ramp dry, wet;
     MixxxPlateX2 reverb;
 };
 
@@ -33,6 +34,7 @@ class ReverbEffect : public EffectProcessorImpl<ReverbGroupState> {
 
     static QString getId();
     static EffectManifestPointer getManifest();
+    static double timeSeconds(double normalized);
 
     void loadEngineEffectParameters(
             const QMap<QString, EngineEffectParameterPointer>& parameters) override;
