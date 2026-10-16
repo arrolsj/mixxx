@@ -705,6 +705,7 @@ PioneerDDJSX.bindDeckControlConnections = function(channelGroup, bind) {
             'bpm_tap': 'PioneerDDJSX.shiftHeadphoneCueLed',
             'peak_meter_db': 'PioneerDDJSX.VuMeterLeds',
             'keylock': 'PioneerDDJSX.keyLockLed',
+            'vinyl_mode': 'PioneerDDJSX.vinylModeChanged',
             'slip_enabled': 'PioneerDDJSX.slipLed',
             'quantize': 'PioneerDDJSX.quantizeLed',
             'loop_in': 'PioneerDDJSX.loopInLed',
@@ -2356,15 +2357,23 @@ PioneerDDJSX.jogTouch = function(channel, control, value, status, group) {
     }
 };
 
+// VINYL mode lives in the shared [ChannelN],vinyl_mode control so the UI and
+// every controller agree. The button only toggles it; vinylModeChanged applies
+// the result to the jog wheel and the LED.
 PioneerDDJSX.toggleScratch = function(channel, control, value, status, group) {
-    var deck = PioneerDDJSX.channelGroups[group];
     if (value) {
-        if (PioneerDDJSX.scratchMode[deck]) {
-            PioneerDDJSX.releaseJogScratch(deck);
-        }
-        PioneerDDJSX.scratchMode[deck] = !PioneerDDJSX.scratchMode[deck];
-        PioneerDDJSX.triggerVinylLed(deck);
+        script.toggleControl(group, "vinyl_mode");
     }
+};
+
+PioneerDDJSX.vinylModeChanged = function(value, group) {
+    var deck = PioneerDDJSX.channelGroups[group];
+    var enabled = value > 0;
+    if (PioneerDDJSX.scratchMode[deck] && !enabled) {
+        PioneerDDJSX.releaseJogScratch(deck);
+    }
+    PioneerDDJSX.scratchMode[deck] = enabled;
+    PioneerDDJSX.triggerVinylLed(deck);
 };
 
 PioneerDDJSX.triggerVinylLed = function(deck) {
