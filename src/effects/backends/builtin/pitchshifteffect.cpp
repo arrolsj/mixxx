@@ -1,56 +1,318 @@
 #include "effects/backends/builtin/pitchshifteffect.h"
 
-#include <rubberband/RubberBandStretcher.h>
-
 #include <QString>
+#include <algorithm>
+#include <cmath>
 
 #include "effects/backends/effectmanifest.h"
 #include "engine/effects/engineeffectparameter.h"
-#include "util/sample.h"
 
 namespace {
-static constexpr SINT kSemitonesPerOctave = 12;
+const QString kPitchParameterId = QStringLiteral("rkb_pitch");
+const QString kDepthParameterId = QStringLiteral("depth");
 
-static const QString kPitchParameterId = QStringLiteral("pitch");
-static const QString kRangeParameterId = QStringLiteral("range");
-static const QString kSemitonesModeParameterId = QStringLiteral("semitonesMode");
-static const QString kFormantPreservingParameterId = QStringLiteral("formantPreserving");
+constexpr float kFloatEpsilon = 1.1920929e-07f;
+constexpr float kMaxOffsetStep = 0.05f;
+constexpr float kGateOffset = -0.95f;
+constexpr double kQuality = 0.70710678118654757;
+
+float smoothstep(float t) {
+    const float t2 = t * t;
+    return std::fma(t2, 3.0f, -((t2 + t2) * t));
+}
 } // anonymous namespace
 
-PitchShiftEffect::PitchShiftEffect()
-        : m_currentFormant(false) {
+namespace lastcue {
+
+void RbxPitchShifter::Biquad::configure(double sampleRate, double cutoff, bool highPass) {
+    const double k = std::tan(
+            3.14159265358979323846 / static_cast<int>(sampleRate) *
+            std::min(cutoff, sampleRate * 0.5));
+    // Same operation order as the native IirHpf2ndOrder/IirLpf2ndOrder.
+    const double k2 = k * k;
+    const double den = std::fma(k, 1.0 / kQuality, 1.0) + k2;
+    const double twoK2MinusTwo = std::fma(k + k, k, -2.0);
+    if (highPass) {
+        const double norm = 1.0 / den;
+        b0 = static_cast<float>(norm);
+        b1 = static_cast<float>(norm * -2.0);
+        a1 = static_cast<float>(twoK2MinusTwo * norm);
+    } else {
+        b0 = static_cast<float>(k2 / den);
+        b1 = b0 + b0;
+        a1 = static_cast<float>(twoK2MinusTwo / den);
+    }
+    b2 = b0;
+    a2 = static_cast<float>((std::fma(-k, 1.0 / kQuality, 1.0) + k2) / den);
+    memory = {};
 }
+
+float RbxPitchShifter::Biquad::process(float x, int channel) {
+    auto& m = memory[channel];
+    const float y = b0 * x + b1 * m[0] + b2 * m[1] - a1 * m[2] - a2 * m[3];
+    m[1] = m[0];
+    m[0] = x;
+    m[3] = m[2];
+    m[2] = y;
+    return y;
+}
+
+float RbxPitchShifter::offsetForControl(float control) {
+    if (control < -200.0f) {
+        return -200.0f * 0.005f;
+    }
+    const float x = std::min(control, 200.0f);
+    if (x < 0.0f) {
+        return x * 0.005f;
+    }
+    if (x < 100.0f) {
+        return x * 0.01f;
+    }
+    return std::fma(x - 100.0f, 0.02f, 1.0f);
+}
+
+void RbxPitchShifter::configure(double sampleRate, int maxFramesPerBuffer) {
+    m_sampleRate = sampleRate;
+    m_minWindow = static_cast<int>(std::lrint(sampleRate * 0.013));
+    m_crossfade = static_cast<int>(std::lrint(sampleRate * 0.003));
+    m_crossfadeStep = 1.0f / static_cast<float>(m_crossfade);
+    m_maxWindow = static_cast<int>(std::lrint(sampleRate * 0.023));
+    m_startFill = static_cast<int>(std::lrint(sampleRate * 0.03));
+    m_gateFrames = static_cast<int>(std::lrint(static_cast<float>(sampleRate) * 0.001f * 20.0f));
+    // The native ring holds one callback plus the crossfade and start fill.
+    // A larger ring reads identically because delays never reach its end.
+    m_ringFrames = std::max(maxFramesPerBuffer, 1) + m_crossfade + m_startFill;
+    m_ring.assign(static_cast<size_t>(m_ringFrames) * 2, 0);
+    m_analysis.assign(static_cast<size_t>(std::max(maxFramesPerBuffer, 1)) + 1, 0);
+    m_highPass.configure(sampleRate, 30.0, true);
+    m_lowPass.configure(sampleRate, 300.0, false);
+    reset();
+}
+
+void RbxPitchShifter::reset() {
+    std::fill(m_ring.begin(), m_ring.end(), 0);
+    std::fill(m_analysis.begin(), m_analysis.end(), 0);
+    m_write = 0;
+    m_filled = 0;
+    m_offset = 0;
+    m_delay = 0;
+    m_jump = 0;
+    m_splicing = false;
+    m_starting = true;
+    m_crossfadeCount = 0;
+    m_zeroCrossingAge = 0;
+    m_highPass.memory = {};
+    m_lowPass.memory = {};
+    m_gate.value = m_gate.target = 1;
+    m_gate.remaining = 0;
+}
+
+void RbxPitchShifter::setControl(float control) {
+    m_target = offsetForControl(control);
+}
+
+float RbxPitchShifter::read(int channel, int delay) const {
+    if (delay < 1 || m_filled < delay) {
+        return 0;
+    }
+    int index = m_write - delay;
+    if (index < 0) {
+        index += m_ringFrames;
+    }
+    return m_ring[2 * index + channel];
+}
+
+void RbxPitchShifter::readInterpolated(float delay, float* pLeft, float* pRight) const {
+    const int whole = static_cast<int>(delay);
+    const float t = delay - static_cast<float>(whole);
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    const float w3 = t3 - t;
+    const float w0 = (t + t) + t3;
+    const float w2 = (t3 - t2) - (t + t);
+    const float w1 = (w3 - (t2 + t2)) + 2.0f;
+    for (int channel = 0; channel < 2; ++channel) {
+        const float s0 = read(channel, whole - 1);
+        const float s1 = read(channel, whole);
+        const float s2 = read(channel, whole + 1);
+        const float s3 = read(channel, whole + 2);
+        float even = std::fma(w1, s1, -(w2 * s2));
+        even = std::fma(t2, s0, even);
+        const float odd = std::fma(w3, s3, -(w0 * s0));
+        const float value = std::fma(even, 0.5f, odd * (1.0f / 6.0f));
+        *(channel == 0 ? pLeft : pRight) = value;
+    }
+}
+
+void RbxPitchShifter::controlSplice() {
+    if (m_offset != m_target) {
+        if (std::abs(m_target - m_offset) > kMaxOffsetStep) {
+            m_offset = m_offset < m_target ? m_offset + kMaxOffsetStep
+                                           : m_offset - kMaxOffsetStep;
+        } else {
+            m_offset = m_target;
+        }
+    }
+    const int delay = static_cast<int>(m_delay);
+    const int scaled = static_cast<int>(std::lrint(
+            static_cast<float>(m_crossfade) * m_offset));
+    int expected = delay - static_cast<int>(std::lrint(m_offset));
+    if (expected <= 1) {
+        expected = 2;
+    }
+    const int center = scaled + m_minWindow;
+    const int high = m_maxWindow + scaled;
+    const int crossing = m_zeroCrossingAge;
+    int jump = 0;
+    bool splice = false;
+    if (m_offset < 0) {
+        if (expected >= m_maxWindow) {
+            jump = center - delay;
+            splice = true;
+        } else if (expected >= center && crossing > m_minWindow && crossing < delay) {
+            jump = crossing - delay;
+            splice = true;
+        }
+    } else if (m_offset > 0) {
+        if (expected <= m_minWindow) {
+            jump = high - delay;
+            splice = true;
+        } else if (expected <= center && crossing > center && crossing < high) {
+            jump = crossing - delay;
+            splice = true;
+        }
+    } else if (expected < m_minWindow) {
+        jump = center - delay;
+        splice = true;
+    }
+    if (splice) {
+        m_jump = static_cast<float>(jump);
+        m_splicing = true;
+        m_crossfadeCount = 0;
+    }
+}
+
+void RbxPitchShifter::process(CSAMPLE* pInterleaved, int frames) {
+    if (frames <= 0 || m_ring.empty()) {
+        return;
+    }
+    if (static_cast<size_t>(frames) + 1 > m_analysis.size()) {
+        // Engine buffers never exceed the configured size; stay safe anyway.
+        frames = static_cast<int>(m_analysis.size()) - 1;
+    }
+
+    // Analysis band for splice points: 30 Hz high-pass, 300 Hz low-pass.
+    for (int i = 0; i < frames; ++i) {
+        const float left = m_lowPass.process(
+                m_highPass.process(pInterleaved[2 * i], 0), 0);
+        const float right = m_lowPass.process(
+                m_highPass.process(pInterleaved[2 * i + 1], 1), 1);
+        m_analysis[i + 1] = right * 0.0859375f + left * 0.9140625f;
+    }
+    int crossing = -1;
+    for (int i = 0; i < frames; ++i) {
+        if (!(m_analysis[i] * m_analysis[i + 1] > 0) && m_analysis[i] < 0) {
+            crossing = i;
+            break;
+        }
+    }
+    if (crossing >= 0 && m_zeroCrossingAge >= m_minWindow) {
+        m_zeroCrossingAge = -crossing;
+    }
+    m_analysis[0] = m_analysis[frames];
+
+    for (int i = 0; i < frames; ++i) {
+        const float inLeft = pInterleaved[2 * i];
+        const float inRight = pInterleaved[2 * i + 1];
+        float outLeft;
+        float outRight;
+        if (!m_starting && !m_splicing) {
+            controlSplice();
+        }
+        if (m_starting) {
+            if (m_filled < m_startFill) {
+                outLeft = inLeft;
+                outRight = inRight;
+                m_delay += 1.0f;
+            } else {
+                m_delay -= m_offset;
+                float left;
+                float right;
+                readInterpolated(m_delay, &left, &right);
+                const float w = smoothstep(
+                        static_cast<float>(m_filled - m_startFill) * m_crossfadeStep);
+                outLeft = std::fma(w, left, std::fma(-inLeft, w, inLeft));
+                outRight = std::fma(w, right, std::fma(-inRight, w, inRight));
+                if (w >= 1.0f - m_crossfadeStep) {
+                    m_starting = false;
+                }
+            }
+        } else if (m_splicing) {
+            m_delay -= m_offset;
+            float oldLeft;
+            float oldRight;
+            float newLeft;
+            float newRight;
+            readInterpolated(m_delay, &oldLeft, &oldRight);
+            readInterpolated(m_delay + m_jump, &newLeft, &newRight);
+            const float w = smoothstep(
+                    static_cast<float>(m_crossfadeCount) * m_crossfadeStep);
+            outLeft = std::fma(1.0f - w, oldLeft, w * newLeft);
+            outRight = std::fma(1.0f - w, oldRight, w * newRight);
+            ++m_crossfadeCount;
+            if (w >= 1.0f - m_crossfadeStep) {
+                m_delay = m_jump + m_delay;
+                m_splicing = false;
+                m_crossfadeCount = 0;
+            }
+        } else {
+            m_delay -= m_offset;
+            readInterpolated(m_delay, &outLeft, &outRight);
+        }
+        m_ring[2 * m_write] = inLeft;
+        m_ring[2 * m_write + 1] = inRight;
+        m_write = (m_write + 1) % m_ringFrames;
+        m_filled = std::min(m_filled + 1, m_ringFrames);
+        pInterleaved[2 * i] = outLeft;
+        pInterleaved[2 * i + 1] = outRight;
+    }
+    m_zeroCrossingAge += frames;
+
+    // Silence gate for read speeds below 5 %, ramped over 20 ms.
+    const float gateTarget = m_offset < kGateOffset ? 0.0f : 1.0f;
+    if (gateTarget != m_gate.target) {
+        m_gate.target = gateTarget;
+        m_gate.remaining = m_gateFrames;
+        m_gate.step = (gateTarget - m_gate.value) / static_cast<float>(m_gateFrames);
+    }
+    for (int i = 0; i < frames; ++i) {
+        const float gain = m_gate.value;
+        pInterleaved[2 * i] *= gain;
+        pInterleaved[2 * i + 1] *= gain;
+        if (m_gate.remaining > 0) {
+            if (--m_gate.remaining == 0) {
+                m_gate.value = m_gate.target;
+            } else {
+                m_gate.value += m_gate.step;
+            }
+        }
+    }
+}
+
+} // namespace lastcue
 
 PitchShiftGroupState::PitchShiftGroupState(
         const mixxx::EngineParameters& engineParameters)
         : EffectState(engineParameters) {
-    initializeBuffer(engineParameters);
     audioParametersChanged(engineParameters);
-}
-
-PitchShiftGroupState::~PitchShiftGroupState() {
-}
-
-void PitchShiftGroupState::initializeBuffer(
-        const mixxx::EngineParameters& engineParameters) {
-    m_retrieveBuffer[0] = mixxx::SampleBuffer(
-            engineParameters.framesPerBuffer());
-    m_retrieveBuffer[1] = mixxx::SampleBuffer(
-            engineParameters.framesPerBuffer());
 }
 
 void PitchShiftGroupState::audioParametersChanged(
         const mixxx::EngineParameters& engineParameters) {
-    m_pRubberBand = std::make_unique<RubberBand::RubberBandStretcher>(
-            engineParameters.sampleRate(),
-            engineParameters.channelCount(),
-            RubberBand::RubberBandStretcher::OptionProcessRealTime);
-
-    // Set the maximum number of frames that will be ever passing into a single
-    // RubberBand::RubberBandStretcher::process call.
-    m_pRubberBand->setMaxProcessSize(engineParameters.framesPerBuffer());
-    m_pRubberBand->setTimeRatio(1.0);
-};
+    shifter.configure(engineParameters.sampleRate(), engineParameters.framesPerBuffer());
+    wet.assign(engineParameters.samplesPerBuffer(), 0);
+    initialized = false;
+}
 
 // static
 QString PitchShiftEffect::getId() {
@@ -64,12 +326,15 @@ EffectManifestPointer PitchShiftEffect::getManifest() {
     pManifest->setId(getId());
     pManifest->setName(QObject::tr("Pitch Shift"));
     pManifest->setShortName(QObject::tr("Pitch Shift"));
-    pManifest->setAuthor("The Mixxx Team");
-    pManifest->setVersion("2.0");
+    pManifest->setAuthor("The LastCUE Box Team");
+    pManifest->setVersion("3.0");
     pManifest->setDescription(QObject::tr(
             "Raises or lowers the original pitch of a sound."));
     pManifest->setMetaknobDefault(0.5);
 
+    // The first knob is the PITCH control: -1 OCT .. +1 OCT at the default
+    // LEVEL/DEPTH. New ids keep presets of the former RubberBand effect from
+    // linking the knob to the metaknob.
     EffectManifestParameterPointer pitch = pManifest->addParameter();
     pitch->setId(kPitchParameterId);
     pitch->setName(QObject::tr("Pitch"));
@@ -77,42 +342,18 @@ EffectManifestPointer PitchShiftEffect::getManifest() {
     pitch->setDescription(QObject::tr(
             "The pitch shift applied to the sound."));
     pitch->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
-    pitch->setDefaultLinkType(EffectManifestParameter::LinkType::Linked);
     pitch->setNeutralPointOnScale(0.5);
     pitch->setRange(-1.0, 0.0, 1.0);
 
-    EffectManifestParameterPointer range = pManifest->addParameter();
-    range->setId(kRangeParameterId);
-    range->setName(QObject::tr("Range"));
-    range->setShortName(QObject::tr("Range"));
-    range->setDescription(QObject::tr(
-            "The range of the Pitch knob (0 - 2 octaves).\n"));
-    range->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
-    range->setDefaultLinkType(EffectManifestParameter::LinkType::Linked);
-    range->setNeutralPointOnScale(0.5);
-    range->setRange(0.0, 1.0, 2.0);
-
-    EffectManifestParameterPointer semitonesMode = pManifest->addParameter();
-    semitonesMode->setId(kSemitonesModeParameterId);
-    semitonesMode->setName(QObject::tr("Semitones"));
-    semitonesMode->setShortName(QObject::tr("Semitones"));
-    semitonesMode->setDescription(QObject::tr(
-            "Change the pitch in semitone steps instead of continuously."));
-    semitonesMode->setValueScaler(EffectManifestParameter::ValueScaler::Toggle);
-    semitonesMode->setUnitsHint(EffectManifestParameter::UnitsHint::Unknown);
-    semitonesMode->setRange(0, 1, 1);
-
-    EffectManifestParameterPointer formantPreserving = pManifest->addParameter();
-    formantPreserving->setId(kFormantPreservingParameterId);
-    formantPreserving->setName(QObject::tr("Formant"));
-    formantPreserving->setShortName(QObject::tr("Formant"));
-    formantPreserving->setDescription(QObject::tr(
-            "Preserve the resonant frequencies (formants) of the human vocal tract "
-            "and other instruments.\n"
-            "Hint: compensates \"chipmunk\" or \"growling\" voices"));
-    formantPreserving->setValueScaler(EffectManifestParameter::ValueScaler::Toggle);
-    formantPreserving->setUnitsHint(EffectManifestParameter::UnitsHint::Unknown);
-    formantPreserving->setRange(0, 0, 1);
+    EffectManifestParameterPointer depth = pManifest->addParameter();
+    depth->setId(kDepthParameterId);
+    depth->setName(QObject::tr("Level"));
+    depth->setShortName(QObject::tr("Level"));
+    depth->setDescription(QObject::tr(
+            "Scales the range of the Pitch knob."));
+    depth->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
+    depth->setDefaultLinkType(EffectManifestParameter::LinkType::Linked);
+    depth->setRange(0.0, 0.5, 1.0);
 
     return pManifest;
 }
@@ -120,9 +361,17 @@ EffectManifestPointer PitchShiftEffect::getManifest() {
 void PitchShiftEffect::loadEngineEffectParameters(
         const QMap<QString, EngineEffectParameterPointer>& parameters) {
     m_pPitchParameter = parameters.value(kPitchParameterId);
-    m_pRangeParameter = parameters.value(kRangeParameterId);
-    m_pSemitonesModeParameter = parameters.value(kSemitonesModeParameterId);
-    m_pFormantPreservingParameter = parameters.value(kFormantPreservingParameterId);
+    m_pDepthParameter = parameters.value(kDepthParameterId);
+}
+
+// static
+float PitchShiftEffect::nativeControl(double pitch, double depth) {
+    const float p = static_cast<float>((pitch + 1.0) * 0.5);
+    const float scaled = p * 200.0f;
+    const float control = ((scaled - 100.0f) + scaled) - 100.0f;
+    const float result = control * static_cast<float>(depth);
+    // The native PITCH parameter is an integer clamped to -200..+200.
+    return static_cast<float>(std::clamp(static_cast<int>(result), -200, 200));
 }
 
 void PitchShiftEffect::processChannel(
@@ -133,120 +382,42 @@ void PitchShiftEffect::processChannel(
         const EffectEnableState enableState,
         const GroupFeatureState& groupFeatures) {
     Q_UNUSED(groupFeatures);
-    Q_UNUSED(enableState);
-
-    DEBUG_ASSERT(engineParameters.framesPerBuffer() <= pState->m_retrieveBuffer[0].size());
-
-    if (const bool formantPreserving = m_pFormantPreservingParameter->toBool();
-            m_currentFormant != formantPreserving) {
-        m_currentFormant = formantPreserving;
-
-        pState->m_pRubberBand->setFormantOption(m_currentFormant
-                        ? RubberBand::RubberBandStretcher::
-                                  OptionFormantPreserved
-                        : RubberBand::RubberBandStretcher::
-                                  OptionFormantShifted);
+    const int frames = static_cast<int>(engineParameters.framesPerBuffer());
+    const SINT samples = engineParameters.samplesPerBuffer();
+    if (static_cast<SINT>(pState->wet.size()) < samples) {
+        pState->wet.resize(samples);
     }
 
-    // The range of the scale of the Pitch parameter is <-1.0, 1.0>
-    // with the middle position 0.0. On the other hand, the range
-    // of the scale of the Range parameter is <0.0, 2.0> with the middle
-    // position 1.0. With that, the resulting pitch is obtained using the Pitch
-    // and Range settings with the following implications for some examples:
-    //
-    // With the default range set to 1.0, the resulting pitch value stored
-    // in the pitchParameter is in the range <0.5, 2.0>, so the pitch
-    // can be changed from one octave down to one octave up.
-    //
-    // 1. Range (default): 1.0
-    //    - Pitch (default):  0.0 => pow(2.0,  0.0) = 1.0  => pitch is unchanged
-    //    - Pitch:           -1.0 => pow(2.0, -1.0) = 0.5  => one octave down
-    //    - Pitch:            1.0 => pow(2.0,  1.0) = 2.0  => one octave up
-    //
-    // With the default range set to 2.0, the resulting pitch value stored
-    // in the pitchParameter is in range <0.25, 4.0>, so the pitch
-    // can be changed from two octaves down to two octaves up.
-    //
-    // 2. Range: 2.0
-    //    - Pitch (default):  0.0 => pow(2.0,  0.0) = 1.0  => pitch is unchanged
-    //    - Pitch:           -1.0 => pow(2.0, -2.0) = 0.25 => two octaves down
-    //    - Pitch:            1.0 => pow(2.0,  2.0) = 4.0  => two octaves up
-    //
-    // When the range is set to 0.0, the resulting pitch value that is stored
-    // in the pitchParameter is exactly 1.0 only, so the pitch does not change.
-    //
-    // 3. Range: 0.0
-    //    - Pitch (default):  0.0 => pow(2.0,  0.0) = 1.0  => pitch is unchanged
-    //    - Pitch:           -1.0 => pow(2.0,  0.0) = 1.0  => pitch is unchanged
-    //    - Pitch:            1.0 => pow(2.0,  0.0) = 1.0  => pitch is unchanged
-    //
-    // The reason for keeping this range value is that if the pitch value is fixed
-    // by changing the range value, the resulting pitch can only change in one way (up or down)
-    // and with a specific scale range based on the pitch fixed setting.
-    //
-    // 1. Pitch: 1.0
-    //    - Range: 0.0 => pow(2.0, 0.0) = 1.0 => pitch is unchanged
-    //    - Range: 1.0 => pow(2.0, 1.0) = 2.0 => one octave up
-    //    - Range: 2.0 => pow(2.0, 2.0) = 4.0 => two octaves up
-    //
-    // 2. Pitch: -1.0
-    //    - Range: 0.0 => pow(2.0,  0.0) = 1.0  => pitch is unchanged
-    //    - Range: 1.0 => pow(2.0, -1.0) = 0.5  => one octave down
-    //    - Range: 2.0 => pow(2.0, -2.0) = 0.25 => two octaves down
-    double pitchParameter = m_pPitchParameter->value() * m_pRangeParameter->value();
+    const double pitch = m_pPitchParameter ? m_pPitchParameter->value() : 0.0;
+    const double depth = m_pDepthParameter ? m_pDepthParameter->value() : 0.5;
+    const float p = static_cast<float>((pitch + 1.0) * 0.5);
+    const bool neutral = std::abs(static_cast<float>(depth)) < kFloatEpsilon ||
+            std::abs(p - 0.5f) < kFloatEpsilon;
+    const float dryTarget = neutral ? 1.0f : 0.0f;
 
-    // Choose the scale of the Pitch knob, and based on that, recalculate the pitch value.
-    // There are 2 possible scales:
-    // 1. Semitones mode (true) - The Pitch knob parameter value is recalculated
-    //    to proceed on the semitone chromatic scale. By default,
-    //    this mode is used.
-    // 2. Continuous mode (false) - The Pitch knob changes values continuously,
-    //    the same as the RubberBand classic approach.
-    if (m_pSemitonesModeParameter->toBool()) {
-        // To keep the values in the semitone chromatic scale, the pitch value
-        // must be rounded to a fraction of the scale in one octave. So,
-        // the value has to be rounded to the fraction of the number
-        // of semitones in octave.
-        pitchParameter = roundToFraction(pitchParameter, kSemitonesPerOctave);
+    if (!pState->initialized || enableState == EffectEnableState::Enabling) {
+        pState->shifter.reset();
+        pState->dry.value = pState->dry.target = dryTarget;
+        pState->dry.remaining = 0;
+        pState->wetGain.value = pState->wetGain.target = 1.0f - dryTarget;
+        pState->wetGain.remaining = 0;
+        pState->initialized = true;
     }
 
-    // In equal temperament, all the semitones have the same size (100 cents),
-    // and there are twelve semitones in an octave (1200 cents). As a result,
-    // the notes of an equal-tempered chromatic scale are equally-spaced.
-    // The pitch scaling ratio corresponds to a shift of S equal-tempered
-    // semitones (where S is positive for an upwards shift and negative
-    // for downwards) is pow(2.0, S / 12.0). The pitch scaling ratio
-    // is the ratio of target frequency to source frequency. For example,
-    // a ratio of 2.0 would shift up by one octave, 0.5 down by one octave,
-    // or 1.0 leaving the pitch unaffected.
-    const double pitch = std::pow(2.0, pitchParameter);
+    pState->shifter.setControl(nativeControl(pitch, depth));
+    std::copy(pInput, pInput + samples, pState->wet.begin());
+    pState->shifter.process(pState->wet.data(), frames);
 
-    pState->m_pRubberBand->setPitchScale(pitch);
-
-    SampleUtil::deinterleaveBuffer(
-            pState->m_retrieveBuffer[0].data(),
-            pState->m_retrieveBuffer[1].data(),
-            pInput,
-            engineParameters.framesPerBuffer());
-
-    CSAMPLE* retrieveBuffers[2]{pState->m_retrieveBuffer[0].data(),
-            pState->m_retrieveBuffer[1].data()};
-    pState->m_pRubberBand->process(
-            retrieveBuffers,
-            engineParameters.framesPerBuffer(),
-            false);
-
-    SINT framesAvailable = pState->m_pRubberBand->available();
-    SINT framesToRead = math_min(
-            framesAvailable,
-            engineParameters.framesPerBuffer());
-
-    SINT receivedFrames = pState->m_pRubberBand->retrieve(
-            retrieveBuffers,
-            framesToRead);
-
-    SampleUtil::interleaveBuffer(pOutput,
-            pState->m_retrieveBuffer[0].data(),
-            pState->m_retrieveBuffer[1].data(),
-            receivedFrames);
+    // The native host switches between dry and the shifted signal with
+    // 1/300 s ramps; a centered knob therefore has no shifter latency.
+    const int rampFrames = std::max(1,
+            static_cast<int>(0.0033333334f * static_cast<float>(engineParameters.sampleRate())));
+    pState->dry.set(dryTarget, rampFrames);
+    pState->wetGain.set(1.0f - dryTarget, rampFrames);
+    for (int i = 0; i < frames; ++i) {
+        const float dry = pState->dry.next();
+        const float wet = pState->wetGain.next();
+        pOutput[2 * i] = dry * pInput[2 * i] + wet * pState->wet[2 * i];
+        pOutput[2 * i + 1] = dry * pInput[2 * i + 1] + wet * pState->wet[2 * i + 1];
+    }
 }
