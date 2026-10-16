@@ -85,7 +85,8 @@ TEST(PitchShiftEffectTest, ManifestExposesPitchKnobFirstAndLinkedLevel) {
     const auto pitch = manifest->parameters().at(0);
     const auto depth = manifest->parameters().at(1);
     EXPECT_EQ(pitch->id(), QStringLiteral("rkb_pitch"));
-    EXPECT_EQ(pitch->getDefault(), 0.0);
+    EXPECT_EQ(pitch->getDefault(), -0.5);
+    EXPECT_EQ(PitchShiftEffect::nativeControl(pitch->getDefault(), depth->getDefault()), -50.0f);
     EXPECT_EQ(pitch->getMinimum(), -1.0);
     EXPECT_EQ(pitch->getMaximum(), 1.0);
     EXPECT_EQ(pitch->defaultLinkType(), EffectManifestParameter::LinkType::None);

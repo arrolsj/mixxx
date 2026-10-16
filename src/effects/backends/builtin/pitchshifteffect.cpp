@@ -343,7 +343,7 @@ EffectManifestPointer PitchShiftEffect::getManifest() {
             "The pitch shift applied to the sound."));
     pitch->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
     pitch->setNeutralPointOnScale(0.5);
-    pitch->setRange(-1.0, 0.0, 1.0);
+    pitch->setRange(-1.0, -0.5, 1.0);
 
     EffectManifestParameterPointer depth = pManifest->addParameter();
     depth->setId(kDepthParameterId);
