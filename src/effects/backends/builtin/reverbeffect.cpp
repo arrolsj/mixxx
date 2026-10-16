@@ -139,6 +139,7 @@ void ReverbEffect::processChannel(
     const int ramp = performance_fx::rampFrames(engineParameters.sampleRate());
     pState->dry.set(on ? gains[0] : 1, ramp);
     pState->wet.set(on ? gains[1] : 0, ramp);
+    pState->limiter.configure(engineParameters.sampleRate());
 
     if (pState->sampleRate != engineParameters.sampleRate()) {
         pState->reverb.setSamplerate(engineParameters.sampleRate());
@@ -166,7 +167,12 @@ void ReverbEffect::processChannel(
         const float dry = pState->dry.next(), wet = pState->wet.next();
         for (int channel = 0; channel < 2; ++channel) {
             const int i = frame * 2 + channel;
-            pOutput[i] = dry*pInput[i] + wet*pOutput[i];
+            // Reference ReverbCore has an approximately .2 input scale and
+            // -3 dB output trim. Keep those separate from LEVEL's wet balance.
+            constexpr float kNetworkLevel = .2f * .7079457640647888f;
+            pOutput[i] = dry*pInput[i] + wet*kNetworkLevel*pOutput[i];
         }
+        if (wet > 0) pState->limiter.process(pOutput+frame*2);
+        else pState->limiter.gain=1;
     }
 }

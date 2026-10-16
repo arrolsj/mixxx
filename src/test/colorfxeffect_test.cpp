@@ -18,12 +18,52 @@
 #include "engine/effects/groupfeaturestate.h"
 #include "engine/engine.h"
 #include "util/samplebuffer.h"
+#include "effects/chains/quickeffectchain.h"
+#include "effects/effectslot.h"
+#include "test/signalpathtest.h"
 
 namespace {
 
 constexpr auto kSampleRate = mixxx::audio::SampleRate(48000);
 constexpr SINT kFramesPerBuffer = 256;
 constexpr double kPi = 3.14159265358979323846;
+
+class ColorNoiseSignalPathTest : public BaseSignalPathTest {};
+
+TEST_F(ColorNoiseSignalPathTest, EmptyDeckNoiseObeysFaderMuteAndPfl) {
+    ASSERT_FALSE(m_pChannel1->getEngineBuffer()->isTrackLoaded());
+    m_pEffectsManager->addDeck(ChannelHandleAndGroup(m_pChannel1->getHandle(), m_sGroup1));
+    auto chain=m_pEffectsManager->getQuickEffectChain(m_sGroup1);
+    ASSERT_TRUE(chain);
+    auto slot=chain->getEffectSlot(0);
+    slot->loadEffectWithDefaults(m_pEffectsManager->getBackendManager()->getManifest(
+            ColorNoiseEffect::getId(),EffectBackendType::BuiltIn));
+    slot->setEnabled(true); slot->setMetaParameter(.25,true);
+    ControlObject::set(ConfigKey(m_sGroup1,"volume"),1);
+    ControlObject::set(ConfigKey(m_sMainGroup,"headMix"),-1);
+    m_pChannel1->setPfl(true);
+    auto process=[&] {
+        for(int b=0;b<8;++b) { QCoreApplication::processEvents(); m_pEngineMixer->process(kProcessBufferSize); }
+    };
+    auto peak=[&](const float* buffer) {
+        float p=0; for(int i=0;i<kProcessBufferSize;++i) p=std::max(p,std::abs(buffer[i])); return p;
+    };
+    process();
+    EXPECT_TRUE(m_pChannel1->isActive());
+    EXPECT_GT(peak(m_pEngineMixer->getMainBuffer()),1e-5);
+    EXPECT_GT(peak(m_pEngineMixer->getHeadphoneBuffer()),1e-5);
+    ControlObject::set(ConfigKey(m_sGroup1,"volume"),0); process();
+    EXPECT_EQ(peak(m_pEngineMixer->getMainBuffer()),0);
+    EXPECT_GT(peak(m_pEngineMixer->getHeadphoneBuffer()),1e-5);
+    ControlObject::set(ConfigKey(m_sGroup1,"volume"),1);
+    ControlObject::set(ConfigKey(m_sGroup1,"mute"),1); process();
+    EXPECT_EQ(peak(m_pEngineMixer->getMainBuffer()),0);
+    ControlObject::set(ConfigKey(m_sGroup1,"mute"),0);
+    slot->setMetaParameter(.5,true); process();
+    EXPECT_EQ(peak(m_pEngineMixer->getMainBuffer()),0);
+    slot->setEnabled(false); process();
+    EXPECT_FALSE(m_pChannel1->isActive());
+}
 
 template<typename Effect, typename State>
 class ColorFxHarness {
@@ -186,7 +226,8 @@ TEST(ColorFxEffectTest, NoiseAllCodesMatchNativeGainOracle) {
         // An interior normalized value avoids introducing a second truncation
         // via floating point division in this test's control fixture.
         harness.process(std::min(1.0, (code + 0.125) / 255.0));
-        EXPECT_NEAR(harness.state().previousGain, gains[code], 4e-8) << code;
+        // Keep the native 256-code fixture; LastCUE Box's listening trim is +6.02 dB.
+        EXPECT_NEAR(harness.state().previousGain, 2*gains[code], 8e-8) << code;
     }
 }
 

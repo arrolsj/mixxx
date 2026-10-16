@@ -13,6 +13,7 @@ class BeatDelayState : public EffectState {
     float fade=1;
     performance_fx::Ramp inputGain, dry, wet;
     performance_fx::DcBlock dc;
+    performance_fx::PeakLimiter limiter;
 };
 
 class BeatEchoEffect : public EffectProcessorImpl<BeatDelayState> {

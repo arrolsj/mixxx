@@ -29,6 +29,22 @@ struct Ramp {
     }
 };
 
+// Output protection for accumulated wet signals. Stereo-linked instantaneous
+// attack avoids sample clipping without adding latency; release is 50 ms.
+// This is LastCUE Box output policy, not a reconstruction of the host limiter.
+struct PeakLimiter {
+    float gain = 1;
+    float release = 0;
+    void configure(double fs) { release = static_cast<float>(std::exp(-1/(.05*fs))); }
+    void process(float* frame) {
+        const float peak = std::max(std::abs(frame[0]), std::abs(frame[1]));
+        const float target = peak > .98f ? .98f/peak : 1;
+        gain = std::min(target, 1-(1-gain)*release);
+        frame[0] *= gain;
+        frame[1] *= gain;
+    }
+};
+
 // Second-order main filter, with the opposite first-order response in the
 // resonance feedback path. A fixed-Q biquad alone does not implement this.
 struct Filter {

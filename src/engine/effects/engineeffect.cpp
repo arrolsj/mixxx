@@ -13,6 +13,14 @@ constexpr auto kInitalSampleRate = mixxx::audio::SampleRate(96000);
 
 } // namespace
 
+bool EngineEffect::isEnabledForInput(ChannelHandle input) const {
+    if (!input.valid() || input >= m_effectEnableStateForChannelMatrix.size()) return false;
+    for (const auto state : m_effectEnableStateForChannelMatrix.at(input)) {
+        if (state == EffectEnableState::Enabled || state == EffectEnableState::Enabling) return true;
+    }
+    return false;
+}
+
 EngineEffect::EngineEffect(EffectManifestPointer pManifest,
         EffectsBackendManagerPointer pBackendManager,
         const QSet<ChannelHandleAndGroup>& activeInputChannels,

@@ -192,6 +192,34 @@ bool EngineEffectChain::processesWhilePaused(ChannelHandle input) const {
     return false;
 }
 
+bool EngineEffectChain::isPreFaderNoise() const {
+    if (!m_group.startsWith(QStringLiteral("[QuickEffectRack1_"))) return false;
+    bool noise = false;
+    for (const auto* effect : m_effects) {
+        if (!effect) continue;
+        const auto manifest = effect->getManifest();
+        if (manifest->backendType() != EffectBackendType::BuiltIn ||
+                manifest->id() != QStringLiteral("org.mixxx.effects.colornoise")) return false;
+        noise = true;
+    }
+    return noise;
+}
+
+bool EngineEffectChain::generatesAudio(ChannelHandle input) const {
+    if (!isPreFaderNoise() || !m_enableState || m_dMix <= 0 ||
+            !input.valid() || input >= m_chainStatusForChannelMatrix.size()) return false;
+    bool routed = false;
+    for (const auto& status : m_chainStatusForChannelMatrix.at(input)) {
+        routed = routed || status.enableState == EffectEnableState::Enabled ||
+                status.enableState == EffectEnableState::Enabling;
+    }
+    if (!routed) return false;
+    for (const auto* effect : m_effects) {
+        if (effect && effect->isEnabledForInput(input)) return true;
+    }
+    return false;
+}
+
 bool EngineEffectChain::hasTail(ChannelHandle input) const {
     if (!processesWhilePaused(input)) return false;
     for (const auto* effect : m_effects) {

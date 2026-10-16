@@ -50,6 +50,7 @@ void BeatEchoEffect::processChannel(BeatDelayState* s,const CSAMPLE* input,CSAMP
         if(!m_echo) s->inputGain.value=s->inputGain.target=1;
     }
     s->dc.configure(fs);
+    s->limiter.configure(fs);
     s->inputGain.set(on || !m_echo ? 1 : 0,ramp);
     s->dry.set(on ? gains[0] : 1,ramp);
     s->wet.set(on || m_echo ? gains[1] : 0,ramp);
@@ -72,6 +73,8 @@ void BeatEchoEffect::processChannel(BeatDelayState* s,const CSAMPLE* input,CSAMP
             output[i]=dry*input[i]+wet*filtered;
             activity=std::max(activity,std::max(std::abs(input[i]*send),std::abs(filtered*wet)));
         }
+        if (m_echo && wet > 0) s->limiter.process(output+2*f);
+        else s->limiter.gain=1;
         if((on || m_echo) && activity>1e-9f) s->tailFrames=s->delay*2+static_cast<int>(fs);
         else if(s->tailFrames>0) --s->tailFrames;
         s->write=(s->write+1)%frames;

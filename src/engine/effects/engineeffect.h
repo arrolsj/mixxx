@@ -59,6 +59,7 @@ class EngineEffect final : public EffectsRequestHandler {
     }
     bool processesWhileDisabled() const { return m_pProcessor->processesWhileDisabled(); }
     bool hasTail(ChannelHandle input) const { return m_pProcessor->hasTail(input); }
+    bool isEnabledForInput(ChannelHandle input) const;
 
   private:
     QString debugString() const {

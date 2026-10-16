@@ -108,6 +108,21 @@ void EngineEffectsManager::processPreFaderInPlace(const ChannelHandle& inputHand
             numSamples,
             sampleRate,
             featureState);
+    // A source-generating Color NOISE must reach both PFL and the channel
+    // fader as part of the deck signal. Other Quick FX keep their tail routing.
+    for (auto* chain : m_chainsByStage.value(SignalProcessingStage::Postfader)) {
+        if (chain && chain->isPreFaderNoise()) {
+            chain->process(inputHandle, outputHandle, pInOut, pInOut,
+                    numSamples, sampleRate, featureState, false);
+        }
+    }
+}
+
+bool EngineEffectsManager::generatesAudio(ChannelHandle input) const {
+    for (const auto* chain : m_chainsByStage.value(SignalProcessingStage::Postfader)) {
+        if (chain && chain->generatesAudio(input)) return true;
+    }
+    return false;
 }
 
 bool EngineEffectsManager::hasTail(ChannelHandle input) const {
@@ -183,7 +198,7 @@ void EngineEffectsManager::processInner(
         // modifying the original input buffer
         SampleUtil::applyRampingGain(pIn, oldGain, newGain, numSamples);
         for (EngineEffectChain* pChain : chains) {
-            if (pChain) {
+            if (pChain && !(stage == SignalProcessingStage::Postfader && pChain->isPreFaderNoise())) {
                 if (pChain->process(inputHandle,
                             outputHandle,
                             pIn,
@@ -214,7 +229,7 @@ void EngineEffectsManager::processInner(
 
         CSAMPLE* pIntermediateOutput;
         for (EngineEffectChain* pChain : chains) {
-            if (pChain) {
+            if (pChain && !(stage == SignalProcessingStage::Postfader && pChain->isPreFaderNoise())) {
                 // Select an unused intermediate buffer for the next output
                 if (pIntermediateInput == m_buffer1.data()) {
                     pIntermediateOutput = m_buffer2.data();

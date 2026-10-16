@@ -46,6 +46,8 @@ class EngineEffectChain final : public EffectsRequestHandler {
             bool fadeout);
     bool hasTail(ChannelHandle input) const;
     bool processesWhilePaused(ChannelHandle input) const;
+    bool isPreFaderNoise() const;
+    bool generatesAudio(ChannelHandle input) const;
 
   private:
     struct ChannelStatus {

@@ -24,6 +24,7 @@ class ReverbGroupState : public EffectState {
 
     float sampleRate;
     performance_fx::Ramp dry, wet;
+    performance_fx::PeakLimiter limiter;
     MixxxPlateX2 reverb;
 };
 

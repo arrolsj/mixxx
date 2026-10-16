@@ -113,6 +113,9 @@ EngineChannel::ActiveState EngineDeck::updateActiveState() {
                 isPassthroughActive();
     }
 
+    const auto* effects = m_pEffectsManager->getEngineEffectsManager();
+    active = active || (effects && effects->generatesAudio(m_group.handle()));
+
     if (active) {
         m_active = true;
         return ActiveState::Active;

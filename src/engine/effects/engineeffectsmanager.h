@@ -18,6 +18,8 @@ struct GroupFeatureState;
 /// EngineChannel ---> EqualizerEffectChains --> channel faders & crossfader --> QuickEffectChains & StandardEffectChains --> mix channels into main mix --> main mix effect processing
 ///                                          |
 ///                                      PFL switch --> QuickEffectChains & StandardEffectChains --> mix channels into headphone mix --> headphone effect processing
+/// A QuickEffectChain containing only built-in Color NOISE runs with the
+/// prefader effects, so generated audio follows channel gain and reaches PFL.
 class EngineEffectsManager final : public EffectsRequestHandler {
   public:
     EngineEffectsManager(std::unique_ptr<EffectsResponsePipe> pResponsePipe);
@@ -25,6 +27,7 @@ class EngineEffectsManager final : public EffectsRequestHandler {
 
     void onCallbackStart();
     bool hasTail(ChannelHandle input) const;
+    bool generatesAudio(ChannelHandle input) const;
 
     /// Process the prefader EngineEffectChains on the pInOut buffer, modifying
     /// the contents of the input buffer.

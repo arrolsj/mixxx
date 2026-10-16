@@ -14,6 +14,8 @@ const QString kColorParameterId = QStringLiteral("color");
 constexpr double kCenter = 0.5;
 // Default PARAM 0.5 is truncated to code 127 in the Djm900Nxs2 path.
 constexpr float kDefaultParamGain = 0.14766541123390198f;
+// LastCUE Box listening calibration: +6.02 dB above the reference PARAM=.5.
+constexpr float kNoiseLevel = 2.0f;
 
 float eighthPower(float value) {
     const float square = value * value;
@@ -130,7 +132,7 @@ void ColorNoiseEffect::processChannel(
             : requestedColor;
     // Unlike FILTER, NOISE truncates the normalized control to a byte.
     const int code = static_cast<int>(targetColor * 255.0);
-    const CSAMPLE_GAIN targetGain = std::clamp(colorGain(code) * kDefaultParamGain, 0.0f, 1.0f);
+    const CSAMPLE_GAIN targetGain = std::clamp(colorGain(code) * kDefaultParamGain * kNoiseLevel, 0.0f, 1.0f);
     const CSAMPLE_GAIN targetToneGain = toneGain(code);
     const SINT samples = engineParameters.samplesPerBuffer();
     if (targetGain == 0.0f && pState->previousGain == 0.0f) {

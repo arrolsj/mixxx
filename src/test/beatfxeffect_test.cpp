@@ -58,6 +58,43 @@ using Roll = Harness<RollEffect, RollState>;
 using Crush = Harness<ColorCrushEffect, ColorCrushGroupState>;
 using Reverb = Harness<ReverbEffect, ReverbGroupState>;
 
+TEST(BeatFxEffectTest, EchoAndReverbStayBelowFullScaleWithSustainedInput) {
+    for (int rate : {44100, 48000, 96000}) {
+      for (double depth : {.5, .75, 1.}) {
+        Echo echo(rate, 257); Reverb reverb(rate, 257);
+        echo.set("depth", depth); echo.set("delay_time", .125);
+        reverb.set("send_amount", depth); reverb.set("decay", 1);
+        float peak=0;
+        for (int block=0; block<static_cast<int>(rate*6/257); ++block) {
+            for (int f=0;f<257;++f) {
+                const double phase=2*3.14159265358979323846*96*(block*257+f)/rate;
+                echo.input[2*f]=reverb.input[2*f]=.9f*static_cast<float>(std::sin(phase));
+                echo.input[2*f+1]=reverb.input[2*f+1]=.45f*static_cast<float>(std::sin(phase));
+            }
+            echo.process(); reverb.process();
+            peak=std::max(peak,echo.peak());
+            ASSERT_LE(echo.peak(), .980001f);
+            ASSERT_LE(reverb.peak(), .980001f);
+            for (int i=0;i<echo.output.size();i+=2)
+                ASSERT_NEAR(echo.output[i+1], echo.output[i]*.5f, 1e-6);
+        }
+        EXPECT_GT(peak,.5f);
+      }
+    }
+}
+
+TEST(BeatFxEffectTest, LimiterIsTransparentBelowThresholdAndReleasesAcrossCallbacks) {
+    performance_fx::PeakLimiter limiter;
+    limiter.configure(48000);
+    float quiet[]{.2f,-.1f}; limiter.process(quiet);
+    EXPECT_FLOAT_EQ(quiet[0],.2f); EXPECT_FLOAT_EQ(quiet[1],-.1f);
+    float loud[]{4,-2}; limiter.process(loud);
+    EXPECT_NEAR(loud[0],.98f,1e-7); EXPECT_NEAR(loud[1],-.49f,1e-7);
+    const float gain=limiter.gain;
+    for(int i=0;i<2400;++i) { float zero[]{0,0}; limiter.process(zero); }
+    EXPECT_GT(limiter.gain,gain); EXPECT_LT(limiter.gain,1);
+}
+
 TEST(BeatFxEffectTest, ReverbUsesReferenceTimeAndOwnsItsDryWetMix) {
     const auto manifest = ReverbEffect::getManifest();
     EXPECT_FALSE(manifest->addDryToWet());
