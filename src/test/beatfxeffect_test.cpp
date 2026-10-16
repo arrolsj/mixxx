@@ -106,6 +106,12 @@ TEST(BeatFxEffectTest, ReverbUsesReferenceTimeAndOwnsItsDryWetMix) {
     EXPECT_EQ(ReverbEffect::timeSeconds(124./255), ReverbEffect::timeSeconds(131./255));
     EXPECT_EQ(ReverbEffect::timeSeconds(-1), ReverbEffect::timeSeconds(0));
     EXPECT_EQ(ReverbEffect::timeSeconds(2), ReverbEffect::timeSeconds(1));
+    // Original 142db40b0 ISA oracle + 142df70b0 input-level instructions.
+    EXPECT_DOUBLE_EQ(ReverbEffect::inputLevel(0), .2);
+    EXPECT_DOUBLE_EQ(ReverbEffect::inputLevel(.5), .2);
+    EXPECT_NEAR(ReverbEffect::inputLevel(132./255), .1991935484111309, 1e-8);
+    EXPECT_NEAR(ReverbEffect::inputLevel(192./255), .1508064568042755, 1e-8);
+    EXPECT_DOUBLE_EQ(ReverbEffect::inputLevel(1), .1);
     for (int i = 0; i <= 1000; ++i) {
         EXPECT_GT(ReverbEffect::timeSeconds(i/1000.), .8);
         EXPECT_LE(ReverbEffect::timeSeconds(i/1000.), 101);

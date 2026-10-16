@@ -36,6 +36,7 @@ class ReverbEffect : public EffectProcessorImpl<ReverbGroupState> {
     static QString getId();
     static EffectManifestPointer getManifest();
     static double timeSeconds(double normalized);
+    static double inputLevel(double normalized);
 
     void loadEngineEffectParameters(
             const QMap<QString, EngineEffectParameterPointer>& parameters) override;

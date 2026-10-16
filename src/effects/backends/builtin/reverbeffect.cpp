@@ -48,6 +48,11 @@ double ReverbEffect::timeSeconds(double normalized) {
             + .01680831052362919)*n - .22553139925003052)*n + 1.7408629655838013);
 }
 
+double ReverbEffect::inputLevel(double normalized) {
+    const double upper = std::clamp((normalized - 131.0/255)*255/124, 0.0, 1.0);
+    return .2 - .1*upper;
+}
+
 // static
 QString ReverbEffect::getId() {
     return "org.mixxx.effects.reverb";
@@ -135,6 +140,7 @@ void ReverbEffect::processChannel(
     const auto bandwidth = static_cast<sample_t>(m_pBandWidthParameter->value());
     const auto damping = static_cast<sample_t>(m_pDampingParameter->value());
     const auto gains = performance_fx::mix(normalizedDepth(m_pSendParameter->value()));
+    const float networkLevel = static_cast<float>(inputLevel(m_pDecayParameter->value())) * .7079457640647888f;
     const bool on = performance_fx::enabled(enableState);
     const int ramp = performance_fx::rampFrames(engineParameters.sampleRate());
     pState->dry.set(on ? gains[0] : 1, ramp);
@@ -167,10 +173,9 @@ void ReverbEffect::processChannel(
         const float dry = pState->dry.next(), wet = pState->wet.next();
         for (int channel = 0; channel < 2; ++channel) {
             const int i = frame * 2 + channel;
-            // Reference ReverbCore has an approximately .2 input scale and
-            // -3 dB output trim. Keep those separate from LEVEL's wet balance.
-            constexpr float kNetworkLevel = .2f * .7079457640647888f;
-            pOutput[i] = dry*pInput[i] + wet*kNetworkLevel*pOutput[i];
+            // Reference TIME reduces network input .2 -> .1 above center;
+            // -3 dB output trim is independent of LEVEL's wet balance.
+            pOutput[i] = dry*pInput[i] + wet*networkLevel*pOutput[i];
         }
         if (wet > 0) pState->limiter.process(pOutput+frame*2);
         else pState->limiter.gain=1;
