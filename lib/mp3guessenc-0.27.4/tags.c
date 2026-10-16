@@ -516,9 +516,23 @@ int check_timing_shift_case(vbrtagdata_t *p)
 {
     if (p->infoTag!=TAG_VBRITAG)
     {
-        if (p->lametag[0]==0 || (tolower(p->lametag[0])=='l' && tolower(p->lametag[1])=='a' && tolower(p->lametag[2])=='v' && tolower(p->lametag[3])=='c'))
+        if (p->lametag[0]==0)
         {
             return EXIT_CODE_CASE_B;
+        }
+        if (tolower(p->lametag[0])=='l' && tolower(p->lametag[1])=='a' && tolower(p->lametag[2])=='v' && tolower(p->lametag[3])=='c')
+        {
+            /* LastCUE Box: Rekordbox times FFmpeg 6+ (Lavc60 and later) tags
+               like LAME tags, while older Lavc tags stay case B. Measured
+               against Rekordbox waveforms of 140 exported tracks. */
+            int major = 0;
+            int i;
+            for (i = 4; i < 9 && isdigit(p->lametag[i]); i++)
+                major = major*10 + (p->lametag[i]-'0');
+            if (major < 60)
+            {
+                return EXIT_CODE_CASE_B;
+            }
         }
         if (!p->lametagVerified)
         {

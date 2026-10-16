@@ -2216,6 +2216,7 @@ if(BUILD_TESTING)
     src/test/queryutiltest.cpp
     src/test/rangelist_test.cpp
     src/test/readaheadmanager_test.cpp
+    src/test/mp3guessenc_test.cpp
     src/test/rekordboxbeatgrid_test.cpp
     src/test/removablemediaservicetest.cpp
     src/test/replaygaintest.cpp
@@ -2820,6 +2821,9 @@ if(WIN32)
 endif()
 target_include_directories(MP3GuessEnc SYSTEM PUBLIC lib/mp3guessenc-0.27.4)
 target_link_libraries(mixxx-lib PRIVATE MP3GuessEnc)
+if(BUILD_TESTING)
+  target_link_libraries(mixxx-test PRIVATE MP3GuessEnc)
+endif()
 
 # OpenGL
 if(IOS)
