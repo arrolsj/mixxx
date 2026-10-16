@@ -23,6 +23,8 @@ Item {
     property real playMarkerPosition: 0.5
     property bool beatGridDownbeatsOnly: false
     property string waveformMode: "RGB"
+    // Optional 3-band layer colors: low, mid, high, lowMid, lowHigh, midHigh, all.
+    property var threeBandColors: ({})
     readonly property bool visualPositionUpdateRequired: deckPlayer.isLoaded
     readonly property bool waveformRefreshRequired: visualPositionUpdateRequired
     property real previousDiagnosticPosition: NaN
@@ -266,6 +268,7 @@ Item {
             renderer: root.waveformMode === "3-BAND"
                     ? Mixxx.ViewportWaveform.Renderer.ThreeBand
                     : Mixxx.ViewportWaveform.Renderer.RGB
+            threeBandColors: root.threeBandColors
             beatGridVisible: true
             beatGridDownbeatsOnly: root.beatGridDownbeatsOnly
             beatColor: Theme.waveformBeatColor

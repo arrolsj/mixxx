@@ -6,9 +6,11 @@
 #include <QQuickItem>
 #include <QQuickPaintedItem>
 #include <QTimer>
+#include <QVariantMap>
 
 #include "qml/qmlplayerproxy.h"
 #include "track/track.h"
+#include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace mixxx {
 namespace qml {
@@ -24,6 +26,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     Q_PROPERTY(QColor colorHigh MEMBER m_colorHigh NOTIFY colorHighChanged)
     Q_PROPERTY(QColor colorMid MEMBER m_colorMid NOTIFY colorMidChanged)
     Q_PROPERTY(QColor colorLow MEMBER m_colorLow NOTIFY colorLowChanged)
+    Q_PROPERTY(QVariantMap threeBandColors READ getThreeBandColors WRITE setThreeBandColors
+                    NOTIFY threeBandColorsChanged)
     QML_NAMED_ELEMENT(WaveformOverview)
 
   public:
@@ -53,6 +57,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     Channels getChannels() const;
     void setRenderer(Renderer renderer);
     Renderer getRenderer() const;
+    void setThreeBandColors(const QVariantMap& colors);
+    QVariantMap getThreeBandColors() const;
 
   protected:
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
@@ -75,6 +81,7 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     void colorHighChanged(const QColor& color);
     void colorMidChanged(const QColor& color);
     void colorLowChanged(const QColor& color);
+    void threeBandColorsChanged();
 
   private:
     void setCurrentTrack(TrackPointer pTrack);
@@ -99,6 +106,8 @@ class QmlWaveformOverview : public QQuickPaintedItem {
     QColor m_colorHigh;
     QColor m_colorMid;
     QColor m_colorLow;
+    QVariantMap m_threeBandColors;
+    waveform::WaveformLayerPalette m_threeBandPalette;
     QTimer m_progressTimer;
     int m_lastProgressCompletion;
     int m_paintedProgressCompletion;

@@ -11,6 +11,7 @@
 #include "control/controlobject.h"
 #include "mixer/basetrackplayer.h"
 #include "moc_qmlviewportwaveform.cpp"
+#include "qml/qmlwaveformpalette.h"
 
 namespace {
 
@@ -196,6 +197,20 @@ void QmlViewportWaveform::setAxesColor(const QColor& color) {
     }
     m_axesColor = color;
     emit axesColorChanged();
+    update();
+}
+
+QVariantMap QmlViewportWaveform::threeBandColors() const {
+    return m_threeBandColors;
+}
+
+void QmlViewportWaveform::setThreeBandColors(const QVariantMap& colors) {
+    if (m_threeBandColors == colors) {
+        return;
+    }
+    m_threeBandColors = colors;
+    m_threeBandPalette = waveformLayerPaletteFromMap(colors);
+    emit threeBandColorsChanged();
     update();
 }
 
@@ -620,7 +635,7 @@ QSGNode* QmlViewportWaveform::updatePaintNode(
                 255);
         for (const waveform::WaveformRgbLayer& layer : layers) {
             const waveform::WaveformRgbColor color =
-                    waveform::rekordboxWaveformLayerColor(layer.bands);
+                    m_threeBandPalette.color(layer.bands);
             const float layerHeight = amplitudeToHeight * layer.amplitude;
             addRectangle(pVertices,
                     &vertexIndex,

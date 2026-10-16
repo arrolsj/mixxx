@@ -5,6 +5,7 @@
 
 #include "mixer/basetrackplayer.h"
 #include "moc_qmlwaveformoverview.cpp"
+#include "qml/qmlwaveformpalette.h"
 #include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace {
@@ -99,6 +100,20 @@ void QmlWaveformOverview::setRenderer(Renderer renderer) {
     }
     m_renderer = renderer;
     emit rendererChanged(renderer);
+    invalidatePaintedProgress();
+}
+
+QVariantMap QmlWaveformOverview::getThreeBandColors() const {
+    return m_threeBandColors;
+}
+
+void QmlWaveformOverview::setThreeBandColors(const QVariantMap& colors) {
+    if (m_threeBandColors == colors) {
+        return;
+    }
+    m_threeBandColors = colors;
+    m_threeBandPalette = waveformLayerPaletteFromMap(colors);
+    emit threeBandColorsChanged();
     invalidatePaintedProgress();
 }
 
@@ -350,7 +365,7 @@ void QmlWaveformOverview::drawFiltered(QPainter* pPainter,
         float innerAmplitude = 0.0f;
         for (const waveform::WaveformRgbLayer& layer : layers) {
             const waveform::WaveformRgbColor color =
-                    waveform::rekordboxWaveformLayerColor(layer.bands);
+                    m_threeBandPalette.color(layer.bands);
             pPainter->setPen(QColor(color.red, color.green, color.blue));
             const float outerAmplitude = innerAmplitude + layer.amplitude;
             pPainter->drawLine(QPointF(offsetX, direction * innerAmplitude),

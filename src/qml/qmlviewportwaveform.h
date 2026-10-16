@@ -5,6 +5,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QTimer>
+#include <QVariantMap>
 
 #include "qml/qmlplayerproxy.h"
 #include "track/track.h"
@@ -30,6 +31,8 @@ class QmlViewportWaveform : public QQuickItem {
     Q_PROPERTY(QColor midColor READ midColor WRITE setMidColor NOTIFY midColorChanged)
     Q_PROPERTY(QColor lowColor READ lowColor WRITE setLowColor NOTIFY lowColorChanged)
     Q_PROPERTY(Renderer renderer READ renderer WRITE setRenderer NOTIFY rendererChanged)
+    Q_PROPERTY(QVariantMap threeBandColors READ threeBandColors WRITE setThreeBandColors
+                    NOTIFY threeBandColorsChanged)
     Q_PROPERTY(bool beatGridVisible READ beatGridVisible WRITE setBeatGridVisible
                     NOTIFY beatGridVisibleChanged)
     Q_PROPERTY(bool beatGridDownbeatsOnly READ beatGridDownbeatsOnly
@@ -73,6 +76,8 @@ class QmlViewportWaveform : public QQuickItem {
     void setLowColor(const QColor& color);
     Renderer renderer() const;
     void setRenderer(Renderer renderer);
+    QVariantMap threeBandColors() const;
+    void setThreeBandColors(const QVariantMap& colors);
     bool beatGridVisible() const;
     void setBeatGridVisible(bool visible);
     bool beatGridDownbeatsOnly() const;
@@ -96,6 +101,7 @@ class QmlViewportWaveform : public QQuickItem {
     void midColorChanged();
     void lowColorChanged();
     void rendererChanged();
+    void threeBandColorsChanged();
     void beatGridVisibleChanged();
     void beatGridDownbeatsOnlyChanged();
     void beatColorChanged();
@@ -142,6 +148,8 @@ class QmlViewportWaveform : public QQuickItem {
     QColor m_midColor{Qt::green};
     QColor m_lowColor{Qt::red};
     Renderer m_renderer{Renderer::RGB};
+    QVariantMap m_threeBandColors;
+    waveform::WaveformLayerPalette m_threeBandPalette;
     bool m_beatGridVisible{false};
     bool m_beatGridDownbeatsOnly{false};
     QColor m_beatColor{Qt::white};

@@ -110,6 +110,23 @@ inline WaveformRgbColor rekordboxWaveformLayerColor(std::uint8_t bands) {
     }
 }
 
+// Colors for every layer band combination, indexed by the band mask. QML can
+// override single entries; the rest keep the Rekordbox defaults above.
+struct WaveformLayerPalette {
+    std::array<WaveformRgbColor, 8> colors;
+
+    WaveformLayerPalette() {
+        for (std::size_t bands = 0; bands < colors.size(); ++bands) {
+            colors[bands] = rekordboxWaveformLayerColor(
+                    static_cast<std::uint8_t>(bands));
+        }
+    }
+
+    WaveformRgbColor color(std::uint8_t bands) const {
+        return bands < colors.size() ? colors[bands] : WaveformRgbColor{};
+    }
+};
+
 inline WaveformRgbColorF mixWaveformRgbColor(
         const WaveformRgbColumn& column,
         const WaveformRgbColorF& lowColor,

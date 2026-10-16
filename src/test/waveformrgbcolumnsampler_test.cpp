@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "qml/qmlwaveformpalette.h"
 #include "waveform/renderers/waveformrgbcolumnsampler.h"
 
 namespace mixxx::waveform {
@@ -328,6 +329,34 @@ TEST(WaveformRgbColumnSamplerTest, UsesRekordboxThreeBandPalette) {
         EXPECT_EQ(entry.color.green, actual.green);
         EXPECT_EQ(entry.color.blue, actual.blue);
     }
+}
+
+TEST(WaveformRgbColumnSamplerTest, QmlPaletteOverridesOnlyGivenBands) {
+    QVariantMap colors;
+    colors.insert(QStringLiteral("low"), QStringLiteral("#102030"));
+    colors.insert(QStringLiteral("all"), QColor(1, 2, 3));
+    colors.insert(QStringLiteral("mid"), QStringLiteral("not a color"));
+    const WaveformLayerPalette palette =
+            mixxx::qml::waveformLayerPaletteFromMap(colors);
+
+    const WaveformRgbColor low = palette.color(kWaveformLowBand);
+    EXPECT_EQ(0x10, low.red);
+    EXPECT_EQ(0x20, low.green);
+    EXPECT_EQ(0x30, low.blue);
+    const WaveformRgbColor all = palette.color(
+            kWaveformLowBand | kWaveformMidBand | kWaveformHighBand);
+    EXPECT_EQ(1, all.red);
+    EXPECT_EQ(2, all.green);
+    EXPECT_EQ(3, all.blue);
+    // Invalid and missing entries keep the Rekordbox defaults.
+    const WaveformRgbColor mid = palette.color(kWaveformMidBand);
+    EXPECT_EQ(230, mid.red);
+    EXPECT_EQ(106, mid.green);
+    EXPECT_EQ(154, mid.blue);
+    const WaveformRgbColor high = palette.color(kWaveformHighBand);
+    EXPECT_EQ(255, high.red);
+    EXPECT_EQ(255, high.green);
+    EXPECT_EQ(255, high.blue);
 }
 
 TEST(WaveformRgbColumnSamplerTest, OutputIsBoundedByPhysicalViewport) {
