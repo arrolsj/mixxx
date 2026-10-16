@@ -13,8 +13,8 @@ const QString kColorParameterId = QStringLiteral("color");
 constexpr double kCenter = 0.5;
 // Default PARAM 0.5 is truncated to code 127 in the Djm900Nxs2 path.
 constexpr float kDefaultParamGain = 0.14766541123390198f;
-// LastCUE Box listening calibration: +6.02 dB above the reference PARAM=.5.
-constexpr float kNoiseLevel = 2.0f;
+// LastCUE Box listening calibration: r31 trim + another 2 dB (+8.02 dB total).
+constexpr float kNoiseLevel = 2.5178508236f;
 
 float eighthPower(float value) {
     const float square = value * value;

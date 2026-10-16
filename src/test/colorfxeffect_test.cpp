@@ -236,8 +236,8 @@ TEST(ColorFxEffectTest, NoiseAllCodesMatchNativeGainOracle) {
         // An interior normalized value avoids introducing a second truncation
         // via floating point division in this test's control fixture.
         harness.process(std::min(1.0, (code + 0.125) / 255.0));
-        // Keep the native 256-code fixture; LastCUE Box's listening trim is +6.02 dB.
-        EXPECT_NEAR(harness.state().previousGain, 2*gains[code], 8e-8) << code;
+        // Keep the native fixture; r31's +6.02 dB trim plus the requested 2 dB.
+        EXPECT_NEAR(harness.state().previousGain, 2.5178508236f*gains[code], 8e-8) << code;
     }
 }
 
