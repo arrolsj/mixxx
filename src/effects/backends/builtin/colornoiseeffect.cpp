@@ -12,50 +12,67 @@
 namespace {
 const QString kColorParameterId = QStringLiteral("color");
 constexpr double kCenter = 0.5;
-constexpr double kMinimumLowPass = 300.0;
-constexpr double kMaximumLowPass = 16000.0;
-constexpr double kMinimumHighPass = 40.0;
-constexpr double kMaximumHighPass = 5000.0;
-constexpr double kFilterQ = 0.707106781;
-constexpr CSAMPLE_GAIN kMaximumNoiseGain = 0.28;
+// Default PARAM 0.5 is truncated to code 127 in the Djm900Nxs2 path.
+constexpr float kDefaultParamGain = 0.14766541123390198f;
 
-double logarithmicRange(double minimum, double maximum, double amount) {
-    return std::exp(std::log(minimum) +
-            std::clamp(amount, 0.0, 1.0) * std::log(maximum / minimum));
+float eighthPower(float value) {
+    const float square = value * value;
+    const float fourth = square * square;
+    return fourth * fourth;
 }
 
-double leftDistance(double color) {
-    const double value = std::clamp(color, 0.0, 1.0) * 255.0;
-    return value < 124.0 ? (124.0 - value) / 124.0 : 0.0;
+float colorGain(int code) {
+    if (code < 124) {
+        const float shape = code <= 40 ? 1.0f :
+                eighthPower(std::fma(-0.00139999995008111f, float(code - 40), 1.0f));
+        return float(124 - code) * 0.011220184154808521f * shape;
+    }
+    if (code < 132) {
+        return 0.0f;
+    }
+    if (code < 157) {
+        const float distance = 157 - code;
+        return std::fma(-0.320000022649765f,
+                (distance * 0.004000000189989805f) * distance, 0.800000011920929f);
+    }
+    if (code < 182) {
+        return std::fma(0.010535363107919693f, float(182 - code), 0.5366159081459045f);
+    }
+    return float(code - 131) * 0.011220184154808521f *
+            eighthPower(std::fma(-0.004000000189989805f, float(code - 180), 1.0f));
 }
 
-double rightDistance(double color) {
-    const double value = std::clamp(color, 0.0, 1.0) * 255.0;
-    return value > 131.0 ? (value - 131.0) / 124.0 : 0.0;
+float toneGain(int code) {
+    const float distance = code < 124 ? 123 - code : (code >= 132 ? code - 132 : 0);
+    const float shaped = (2.0f * 3.3049109333660454e-5f * distance) * distance;
+    return std::min(1.0f, std::fma(0.1f, eighthPower(shaped), 0.7f));
 }
 
-double nonlinearToneGain(double distance) {
-    const double square = distance * distance;
-    const double fourth = square * square;
-    const double eighth = fourth * fourth;
-    return std::min(1.0, 0.7 + 0.1 * eighth);
+double filterQ(int code) {
+    if (code >= 117 && code < 127) {
+        return 2.0 * std::pow(0.938931, code - 116);
+    }
+    return code >= 245 ? 2.0 * std::pow(0.938931, code - 244) : 2.0;
+}
+
+double filterFrequency(int code, double q, double sampleRate) {
+    const double frequency = 100.0 * std::pow(1.040242, code < 128 ? code : code - 128);
+    return std::clamp(frequency * q / (q - 0.5), 5.0, 0.45 * sampleRate);
 }
 } // namespace
 
 ColorNoiseGroupState::ColorNoiseGroupState(
         const mixxx::EngineParameters& engineParameters)
         : EffectState(engineParameters),
-          previousColor(kCenter),
-          lowPassCutoff(kMaximumLowPass),
-          highPassCutoff(kMinimumHighPass),
+          previousGain(0.0f),
+          previousToneGain(0.7f),
+          bandPassCutoff(100.0 * 2.0 / 1.5),
+          bandPassQ(2.0),
           noiseBuffer(engineParameters.samplesPerBuffer()),
-          lowPassBuffer(engineParameters.samplesPerBuffer()),
-          highPassBuffer(engineParameters.samplesPerBuffer()),
+          bandPassBuffer(engineParameters.samplesPerBuffer()),
           generator(std::random_device{}()),
-          lowPassFilter(std::make_unique<EngineFilterBiquad1Low>(
-                  engineParameters.sampleRate(), lowPassCutoff, kFilterQ, false)),
-          highPassFilter(std::make_unique<EngineFilterBiquad1High>(
-                  engineParameters.sampleRate(), highPassCutoff, kFilterQ, false)) {
+          bandPassFilter(std::make_unique<EngineFilterBiquad1Band>(
+                  engineParameters.sampleRate(), bandPassCutoff, bandPassQ)) {
 }
 
 ColorNoiseGroupState::~ColorNoiseGroupState() = default;
@@ -70,9 +87,9 @@ EffectManifestPointer ColorNoiseEffect::getManifest() {
     pManifest->setName(QObject::tr("Color Noise"));
     pManifest->setShortName(QObject::tr("Color Noise"));
     pManifest->setAuthor("The LastCUE Box Team");
-    pManifest->setVersion("2.0");
+    pManifest->setVersion("3.0");
     pManifest->setDescription(QObject::tr(
-            "Rekordbox-style noise with separate low-pass and high-pass color paths"));
+            "Rekordbox-style band-pass noise with Color frequency and level curves"));
     pManifest->setEffectRampsFromDry(true);
     pManifest->setMetaknobDefault(kCenter);
 
@@ -111,65 +128,39 @@ void ColorNoiseEffect::processChannel(
     const auto targetColor = enableState == EffectEnableState::Disabling
             ? kCenter
             : requestedColor;
-    const double targetLeftDistance = leftDistance(targetColor);
-    const double targetRightDistance = rightDistance(targetColor);
-    const double targetLowPassCutoff = logarithmicRange(
-            kMaximumLowPass, kMinimumLowPass, targetLeftDistance);
-    const double targetHighPassCutoff = logarithmicRange(
-            kMinimumHighPass, kMaximumHighPass, targetRightDistance);
-    if (pState->lowPassCutoff != targetLowPassCutoff) {
-        pState->lowPassFilter->setFrequencyCorners(
-                engineParameters.sampleRate(), targetLowPassCutoff, kFilterQ);
-        pState->lowPassCutoff = targetLowPassCutoff;
-    }
-    if (pState->highPassCutoff != targetHighPassCutoff) {
-        pState->highPassFilter->setFrequencyCorners(
-                engineParameters.sampleRate(), targetHighPassCutoff, kFilterQ);
-        pState->highPassCutoff = targetHighPassCutoff;
-    }
-
-    // The color ramp is monotonic, so a path can contribute only when one end
-    // of the ramp lies on its side of the dead zone.
-    const bool lowPassUsed = targetLeftDistance > 0.0 ||
-            leftDistance(pState->previousColor) > 0.0;
-    const bool highPassUsed = targetRightDistance > 0.0 ||
-            rightDistance(pState->previousColor) > 0.0;
-    if (!lowPassUsed && !highPassUsed) {
-        // The whole buffer is in the dead zone, where the noise gain is zero.
-        SampleUtil::copy(pOutput, pInput, engineParameters.samplesPerBuffer());
-        pState->previousColor = targetColor;
+    // Unlike FILTER, NOISE truncates the normalized control to a byte.
+    const int code = static_cast<int>(targetColor * 255.0);
+    const CSAMPLE_GAIN targetGain = std::clamp(colorGain(code) * kDefaultParamGain, 0.0f, 1.0f);
+    const CSAMPLE_GAIN targetToneGain = toneGain(code);
+    const SINT samples = engineParameters.samplesPerBuffer();
+    if (targetGain == 0.0f && pState->previousGain == 0.0f) {
+        SampleUtil::copy(pOutput, pInput, samples);
+        pState->bandPassFilter->pauseFilter();
+        pState->previousToneGain = targetToneGain;
         return;
     }
 
+    const double q = filterQ(code);
+    const double frequency = filterFrequency(code, q, engineParameters.sampleRate());
+    if (frequency != pState->bandPassCutoff || q != pState->bandPassQ) {
+        pState->bandPassFilter->setFrequencyCorners(engineParameters.sampleRate(), frequency, q);
+        pState->bandPassCutoff = frequency;
+        pState->bandPassQ = q;
+    }
+    RampingValue<CSAMPLE_GAIN> gainRamp(pState->previousGain, targetGain,
+            engineParameters.framesPerBuffer());
+    RampingValue<CSAMPLE_GAIN> toneRamp(pState->previousToneGain, targetToneGain,
+            engineParameters.framesPerBuffer());
     std::uniform_real_distribution<CSAMPLE> noiseDistribution(-1.0f, 1.0f);
-    for (SINT i = 0; i < engineParameters.samplesPerBuffer(); ++i) {
-        pState->noiseBuffer[i] = noiseDistribution(pState->generator);
+    for (SINT i = 0; i < samples; ++i) {
+        pState->noiseBuffer[i] = noiseDistribution(pState->generator) *
+                gainRamp.getNth(i / mixxx::kEngineChannelCount);
     }
-    if (lowPassUsed) {
-        pState->lowPassFilter->process(pState->noiseBuffer.data(),
-                pState->lowPassBuffer.data(),
-                engineParameters.samplesPerBuffer());
+    pState->bandPassFilter->process(pState->noiseBuffer.data(), pState->bandPassBuffer.data(), samples);
+    for (SINT i = 0; i < samples; ++i) {
+        pOutput[i] = pInput[i] + pState->bandPassBuffer[i] *
+                toneRamp.getNth(i / mixxx::kEngineChannelCount);
     }
-    if (highPassUsed) {
-        pState->highPassFilter->process(pState->noiseBuffer.data(),
-                pState->highPassBuffer.data(),
-                engineParameters.samplesPerBuffer());
-    }
-
-    RampingValue<CSAMPLE_GAIN> colorRamp(
-            pState->previousColor, targetColor, engineParameters.samplesPerBuffer());
-    for (SINT i = 0; i < engineParameters.samplesPerBuffer(); ++i) {
-        const CSAMPLE_GAIN color = colorRamp.getNth(i);
-        // Never mix a path whose filter did not run for this buffer.
-        const CSAMPLE_GAIN leftAmount = lowPassUsed ? leftDistance(color) : 0.0f;
-        const CSAMPLE_GAIN rightAmount = highPassUsed ? rightDistance(color) : 0.0f;
-        const CSAMPLE_GAIN amount = leftAmount + rightAmount;
-        const CSAMPLE filteredNoise = leftAmount > 0.0f
-                ? pState->lowPassBuffer[i]
-                : pState->highPassBuffer[i];
-        pOutput[i] = pInput[i] + filteredNoise * amount *
-                nonlinearToneGain(amount) * kMaximumNoiseGain;
-    }
-
-    pState->previousColor = targetColor;
+    pState->previousGain = targetGain;
+    pState->previousToneGain = targetToneGain;
 }

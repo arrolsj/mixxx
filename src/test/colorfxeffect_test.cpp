@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <QMap>
+#include <array>
 #include <cmath>
 
 #include "control/controlobject.h"
 #include "effects/backends/builtin/colordubechoeffect.h"
+#include "effects/backends/builtin/colorfiltereffect.h"
+#include "engine/filters/enginefilterbiquad1.h"
 #include "effects/backends/builtin/colornoiseeffect.h"
 #include "effects/backends/builtin/flangereffect.h"
 #include "effects/backends/effectmanifest.h"
@@ -87,6 +90,7 @@ class ColorFxHarness {
 };
 
 using DubEchoHarness = ColorFxHarness<ColorDubEchoEffect, ColorDubEchoGroupState>;
+using FilterHarness = ColorFxHarness<ColorFilterEffect, ColorFilterGroupState>;
 using NoiseHarness = ColorFxHarness<ColorNoiseEffect, ColorNoiseGroupState>;
 using FlangerHarness = ColorFxHarness<FlangerEffect, FlangerGroupState>;
 
@@ -96,6 +100,177 @@ void fillSine(CSAMPLE* pBuffer, SINT samples, SINT* pFrame) {
                 0.5 * std::sin(2.0 * kPi * 440.0 * (*pFrame)++ / kSampleRate));
         pBuffer[i] = value;
         pBuffer[i + 1] = -value;
+    }
+}
+
+
+// Frozen outputs of the RKB 7.2.19 native leaves; source identity and complete
+// oracle live in outer docs/evidence/rkb-cfx-filter-noise-20261017/.
+TEST(ColorFxEffectTest, FilterImpulseMatchesNativeCoefficientOracle) {
+    struct Fixture { int code; std::array<double, 5> c; };
+    const Fixture fixtures[] = {
+        {160, {0.99446558496243209, -1.9889311699248642, -1.9887588024292282, 0.99446558496243209, 0.98910353742050017}},
+        {192, {0.96102581066429471, -1.9220516213285894, -1.9123567006082769, 0.96102581066429471, 0.93174654204890217}},
+        {224, {0.8463754216483711, -1.6927508432967422, -1.5919939789142084, 0.8463754216483711, 0.79350770767927592}},
+        {255, {0.620032575454457, -1.240065150908914, -0.83465106340886308, 0.620032575454457, 0.64547923840896493}},
+        {0, {5.0565748695469927e-05, 0.00010113149739093985, -1.9926995872342026, 5.0565748695469927e-05, 0.99290185022898447}},
+        {32, {0.001292342279276932, 0.002584684558553864, -1.9592263381042214, 0.001292342279276932, 0.96439570722132917}},
+        {64, {0.049101187608616599, 0.098202375217233198, -1.599442859010477, 0.049101187608616599, 0.79584760944494337}},
+        {96, {0.31132751270768932, 0.62265502541537865, -0.36298961993172141, 0.31132751270768932, 0.60829967076247871}},
+    };
+    for (const auto& fixture : fixtures) {
+        FilterHarness harness(44100);
+        SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+        const double color = fixture.code / 255.0;
+        for (int i = 0; i < 4; ++i) harness.process(color);
+        double y1 = 0, y2 = 0;
+        const double wet = fixture.code < 126 ?
+                (fixture.code < 110 ? 1.0 : 1.0 - (fixture.code - 110) / 16.0) :
+                (fixture.code > 146 ? 1.0 : (fixture.code - 130) / 16.0);
+        int frame = 0;
+        for (int buffer = 0; buffer < 8; ++buffer) {
+            SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+            if (buffer == 0) harness.input()[0] = 1;
+            harness.process(color);
+            for (SINT i = 0; i < harness.samplesPerBuffer(); i += 2, ++frame) {
+                const auto& c = fixture.c; // b0, b1, a1, b2, a2
+                const double y = (frame == 0 ? c[0] : 0) +
+                        (frame == 1 ? c[1] : 0) + (frame == 2 ? c[3] : 0) - c[2]*y1 - c[4]*y2;
+                y2 = y1; y1 = y;
+                const double expected = wet*y + (frame == 0 ? 1.0-wet : 0);
+                EXPECT_NEAR(harness.output()[i], expected, 2e-6) << fixture.code << ":" << frame;
+                ASSERT_EQ(harness.output()[i+1], 0) << "stereo leakage";
+            }
+        }
+    }
+}
+
+TEST(ColorFxEffectTest, NoiseAllCodesMatchNativeGainOracle) {
+    const std::array<float, 256> gains = {
+0.20544730366f, 0.203790465739f, 0.202133645422f, 0.200476807501f, 0.19881996958f, 0.19716313166f, 0.195506311342f, 0.193849473421f,
+        0.192192635501f, 0.190535815183f, 0.188878977262f, 0.187222139342f, 0.185565301421f, 0.183908481103f, 0.182251643183f, 0.180594805262f,
+        0.178937967341f, 0.177281147024f, 0.175624309103f, 0.173967471182f, 0.172310650865f, 0.170653812944f, 0.168996975023f, 0.167340137103f,
+        0.165683316785f, 0.164026478864f, 0.162369640944f, 0.160712803023f, 0.159055982705f, 0.157399144785f, 0.155742306864f, 0.154085486546f,
+        0.152428648626f, 0.150771810705f, 0.149114972784f, 0.147458143665f, 0.145801314546f, 0.144144476625f, 0.142487647506f, 0.140830818387f,
+        0.139173980466f, 0.135984494416f, 0.132846735043f, 0.129760007023f, 0.126723676647f, 0.12373703979f, 0.120799585963f, 0.117910575837f,
+        0.115069446112f, 0.112275501466f, 0.109528160998f, 0.106826817401f, 0.104170863368f, 0.101559682792f, 0.0989927387771f, 0.0964693360027f,
+        0.0939890255897f, 0.0915511650251f, 0.089155235018f, 0.0868006194603f, 0.0844867990607f, 0.0822132281236f, 0.0799793345486f, 0.0777845990446f,
+        0.0756285023203f, 0.073510463474f, 0.0714300600315f, 0.0693867330947f, 0.0673799589717f, 0.0654092535775f, 0.0634741020219f, 0.0615740466246f,
+        0.0597085812966f, 0.0578772043501f, 0.0560794801085f, 0.0543148848799f, 0.0525830313965f, 0.050883400367f, 0.0492155825197f, 0.0475790849681f,
+        0.0459734808372f, 0.0443983432523f, 0.0428532189337f, 0.0413376854073f, 0.0398513334013f, 0.0383937052353f, 0.0369644224431f, 0.0355630735524f,
+        0.0341892470909f, 0.0328425359873f, 0.0315225463724f, 0.0302288953792f, 0.0289611825371f, 0.0277190205785f, 0.0265020640426f, 0.0253098904552f,
+        0.0241421785601f, 0.0229985432896f, 0.0218786259809f, 0.0207820657706f, 0.0197085127972f, 0.0186576193999f, 0.017629045619f, 0.0166224448936f,
+        0.0156374849655f, 0.0146738236745f, 0.0137311573675f, 0.0128091438844f, 0.0119074718706f, 0.0110258156688f, 0.0101638694255f, 0.00932132728705f,
+        0.00849787679851f, 0.0076932231082f, 0.00690706256282f, 0.00613911131258f, 0.00538907120515f, 0.00465665894083f, 0.00394159204506f, 0.00324358886841f,
+        0.00256237353747f, 0.00189767554228f, 0.00124922341021f, 0.000616752338546f, 0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.00926157360224f, 0.0181451120717f, 0.0266506429133f,
+        0.0347781452232f, 0.0425276278031f, 0.0498990884525f, 0.0568925227708f, 0.0635079351586f, 0.0697453212151f, 0.0756046853412f, 0.0810860319377f,
+        0.0861893434014f, 0.0909146373354f, 0.0952619049382f, 0.0992311550113f, 0.102822378753f, 0.106035576164f, 0.108870756045f, 0.111327909595f,
+        0.113407036813f, 0.115108146502f, 0.116431221059f, 0.117376286887f, 0.117943317582f, 0.118132330747f, 0.11657661377f, 0.115020905594f,
+        0.113465197419f, 0.111909489243f, 0.110353781067f, 0.108798072891f, 0.107242364716f, 0.10568665654f, 0.104130948364f, 0.102575240189f,
+        0.101019532013f, 0.0994638238371f, 0.0979081156614f, 0.0963524074856f, 0.0947966993099f, 0.0932409911342f, 0.0916852829584f, 0.0901295659811f,
+        0.0885738578054f, 0.0870181496297f, 0.085462441454f, 0.0839067332782f, 0.0823510251025f, 0.0807953169268f, 0.0792395999495f, 0.0782235672691f,
+        0.077181913293f, 0.0761169176212f, 0.0750308774568f, 0.0739259491781f, 0.0728042099497f, 0.0716676093136f, 0.0705181012126f, 0.069357441555f,
+        0.0681874302564f, 0.0670096383926f, 0.0658256678446f, 0.0646370588827f, 0.0634451977502f, 0.062251514698f, 0.0610572507439f, 0.059863695314f,
+        0.0586719486016f, 0.0574831636089f, 0.0562983701165f, 0.0551185759013f, 0.0539447315301f, 0.0527776995543f, 0.0516183249221f, 0.0504674261772f,
+        0.0493256898399f, 0.048193837637f, 0.0470724944781f, 0.0459622852728f, 0.0448637513161f, 0.0437774339031f, 0.0427038303209f, 0.0416433454406f,
+        0.0405964237402f, 0.039563426083f, 0.0385447089315f, 0.0375405759392f, 0.0365513109556f, 0.0355771648249f, 0.0346183861907f, 0.0336751312805f,
+        0.0327475959284f, 0.0318359209594f, 0.0309402361961f, 0.0300606340548f, 0.0291971937494f, 0.0283500120968f, 0.0275190846963f, 0.0267044335518f,
+        0.0259060762663f, 0.0251239908359f, 0.0243581552569f, 0.0236085189203f, 0.0228750312173f, 0.0221576239359f, 0.0214561782552f, 0.0207706171617f,
+        0.0201008306362f, 0.0194466888557f, 0.0188080729996f, 0.0181848389425f, 0.0175768271564f, 0.0169839001171f, 0.016405865291f, 0.0158425598494f,
+        0.0152938099618f, 0.0147594153931f, 0.0142391968118f, 0.0137329594837f, 0.0132404910717f, 0.0127615913405f, 0.0122960358508f, 0.0118436265678f
+    };
+    NoiseHarness harness(44100);
+    SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+    for (int code = 0; code < 256; ++code) {
+        // An interior normalized value avoids introducing a second truncation
+        // via floating point division in this test's control fixture.
+        harness.process(std::min(1.0, (code + 0.125) / 255.0));
+        EXPECT_NEAR(harness.state().previousGain, gains[code], 4e-8) << code;
+    }
+}
+
+TEST(ColorFxEffectTest, NoiseBandPassResponseAndToneMatchReference) {
+    struct Fixture { int code; double hz; double q; double tone; };
+    const Fixture fixtures[] = {
+        {0, 133.33333333333334, 2, 0.8},
+        {64, 1665.4797108601344, 2, 0.7000008},
+        {144, 250.66222424979549, 2, 0.7},
+        {192, 1665.4797108601344, 2, 0.700001},
+        {255, 19845, 0.9999986, 0.8},
+    };
+    for (const auto& f : fixtures) {
+        NoiseHarness harness(44100);
+        SampleUtil::clear(harness.input(), harness.samplesPerBuffer());
+        harness.process(std::min(1.0, (f.code + 0.125)/255.0));
+        EXPECT_NEAR(harness.state().bandPassCutoff, f.hz, 1e-6) << f.code;
+        // Q at the last code is independently checked below from the snapshot.
+        if (f.code != 255) EXPECT_NEAR(harness.state().bandPassQ, f.q, 1e-10);
+        EXPECT_NEAR(harness.state().previousToneGain, f.tone, 3e-6) << f.code;
+        const double q = harness.state().bandPassQ;
+        const double t = std::tan(kPi*f.hz/44100.0);
+        const double den = 1+t/q+t*t;
+        const double b = (t/q)/den, a1 = 2*(t*t-1)/den, a2=(1-t/q+t*t)/den;
+        harness.state().bandPassFilter->pauseFilter();
+        harness.state().bandPassFilter->assumeSettled();
+        harness.input()[0] = 1;
+        mixxx::SampleBuffer output(harness.samplesPerBuffer());
+        harness.state().bandPassFilter->process(harness.input(), output.data(), harness.samplesPerBuffer());
+        double y1=0, y2=0;
+        for (SINT i=0; i<harness.samplesPerBuffer(); i+=2) {
+            const int frame=i/2;
+            const double y=(frame==0 ? b : 0) - (frame==2 ? b : 0) - a1*y1-a2*y2;
+            y2=y1; y1=y;
+            EXPECT_NEAR(output[i], y, 2e-7) << f.code << ":" << frame;
+            ASSERT_EQ(output[i+1], 0);
+        }
+    }
+}
+
+TEST(ColorFxEffectTest, NoisePreservesInputAndDisableSettlesToDry) {
+    NoiseHarness silent, music;
+    silent.state().generator.seed(11); music.state().generator.seed(11);
+    SampleUtil::clear(silent.input(), silent.samplesPerBuffer());
+    SINT frame=0;
+    for (double color : {0.0, 0.25, 1.0, 0.75, 0.5}) {
+        fillSine(music.input(), music.samplesPerBuffer(), &frame);
+        silent.process(color); music.process(color);
+        for (SINT i=0; i<music.samplesPerBuffer(); ++i) {
+            EXPECT_NEAR(music.output()[i]-music.input()[i], silent.output()[i], 4e-8);
+        }
+    }
+    music.process(0, EffectEnableState::Disabling);
+    music.process(0, EffectEnableState::Disabling);
+    for (SINT i=0; i<music.samplesPerBuffer(); ++i) ASSERT_EQ(music.output()[i], music.input()[i]);
+}
+
+TEST(ColorFxEffectTest, FilterAndNoiseRapidSweepIsFiniteAcrossRatesAndBuffers) {
+    for (int rate : {44100, 48000, 96000}) {
+      for (int frames : {64, 256, 512}) {
+        FilterHarness filter(rate, frames); NoiseHarness noise(rate, frames);
+        SINT frame=0;
+        for (int step=0; step<512; ++step) {
+            const int code = step < 256 ? step : 511-step;
+            fillSine(filter.input(), filter.samplesPerBuffer(), &frame);
+            SampleUtil::copy(noise.input(), filter.input(), filter.samplesPerBuffer());
+            const double color=std::min(1.0, (code+0.125)/255.0);
+            filter.process(color); noise.process(color);
+            for (SINT i=0; i<filter.samplesPerBuffer(); ++i) {
+                ASSERT_TRUE(std::isfinite(filter.output()[i]));
+                ASSERT_TRUE(std::isfinite(noise.output()[i]));
+                ASSERT_LT(std::abs(filter.output()[i]), 4);
+                ASSERT_LT(std::abs(noise.output()[i]), 4);
+            }
+        }
+        filter.process(0, EffectEnableState::Disabling);
+        filter.process(0, EffectEnableState::Disabling);
+        noise.process(0, EffectEnableState::Disabling);
+        noise.process(0, EffectEnableState::Disabling);
+        for (SINT i=0; i<filter.samplesPerBuffer(); ++i) {
+            ASSERT_EQ(filter.output()[i], filter.input()[i]);
+            ASSERT_EQ(noise.output()[i], noise.input()[i]);
+        }
+      }
     }
 }
 

@@ -12,19 +12,17 @@
 namespace {
 const QString kColorParameterId = QStringLiteral("color");
 constexpr double kCenter = 128.0 / 255.0;
-constexpr double kMinimumLowPass = 70.0;
-constexpr double kMaximumLowPass = 18000.0;
-constexpr double kMinimumHighPass = 20.0;
-constexpr double kMaximumHighPass = 12000.0;
-constexpr double kFilterQ = 1.1;
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kFilterQ = 2.0;
 
-double logarithmicRange(double minimum, double maximum, double amount) {
-    return std::exp(std::log(minimum) +
-            std::clamp(amount, 0.0, 1.0) * std::log(maximum / minimum));
+int colorByte(double color) {
+    return static_cast<int>(std::round(std::clamp(color, 0.0, 1.0) * 255.0));
 }
 
-double colorByte(double color) {
-    return std::clamp(color, 0.0, 1.0) * 255.0;
+// The reference uses an unprewarped bilinear transform. Convert its analog
+// control frequency for the existing RBJ/Fidlib filters to obtain the same poles.
+double digitalFrequency(double nominalHz, double sampleRate) {
+    return sampleRate / kPi * std::atan(kPi * nominalHz / sampleRate);
 }
 
 double lowPassGain(double color) {
@@ -49,16 +47,26 @@ double highPassGain(double color) {
     return 1.0;
 }
 
-double lowPassCutoff(double color) {
-    return logarithmicRange(kMinimumLowPass,
-            kMaximumLowPass,
-            colorByte(color) / 125.0);
+double lowPassCutoff(double color, double sampleRate) {
+    const double c = colorByte(color);
+    const double nominal = c < 126 ? 100.0 + 0.012497654184699059 * c * c * c : 25100.0;
+    return digitalFrequency(nominal, sampleRate);
 }
 
-double highPassCutoff(double color) {
-    return logarithmicRange(kMinimumHighPass,
-            kMaximumHighPass,
-            (colorByte(color) - 131.0) / 124.0);
+double nominalHighPass(double color) {
+    const double c = colorByte(color) - 130.0;
+    return c > 0 ? 20.0 + 0.004099230282008648 * c * c * c : 20.0;
+}
+
+double highPassQ(double color) {
+    const double nominal = nominalHighPass(color);
+    double damping = 0.5;
+    if (colorByte(color) > 130 && nominal < 249.89999389648438) {
+        const double amount = 1.0 - (nominal - 20.0) / 230.0;
+        damping = std::clamp(4.0 * amount * amount * amount + 0.029999999329447746,
+                0.5, 2.0);
+    }
+    return 1.0 / damping;
 }
 } // namespace
 
@@ -66,8 +74,8 @@ ColorFilterGroupState::ColorFilterGroupState(
         const mixxx::EngineParameters& engineParameters)
         : EffectState(engineParameters),
           previousColor(kCenter),
-          lowPassCutoff(kMaximumLowPass),
-          highPassCutoff(kMinimumHighPass),
+          lowPassCutoff(::lowPassCutoff(kCenter, engineParameters.sampleRate())),
+          highPassCutoff(digitalFrequency(20.0, engineParameters.sampleRate())),
           lowPassActive(false),
           highPassActive(false),
           lowPassBuffer(engineParameters.samplesPerBuffer()),
@@ -90,7 +98,7 @@ EffectManifestPointer ColorFilterEffect::getManifest() {
     pManifest->setName(QObject::tr("Color Filter"));
     pManifest->setShortName(QObject::tr("Color Filter"));
     pManifest->setAuthor("The LastCUE Box Team");
-    pManifest->setVersion("2.0");
+    pManifest->setVersion("3.0");
     pManifest->setDescription(QObject::tr(
             "Rekordbox-style low-pass, dry, and high-pass Color FX routing"));
     pManifest->setEffectRampsFromDry(true);
@@ -134,7 +142,7 @@ void ColorFilterEffect::processChannel(
     const bool targetHighPassActive = highPassGain(targetColor) > 0.0;
 
     if (targetLowPassActive) {
-        const double cutoff = lowPassCutoff(targetColor);
+        const double cutoff = lowPassCutoff(targetColor, engineParameters.sampleRate());
         if (cutoff != pState->lowPassCutoff) {
             pState->lowPassFilter->setFrequencyCorners(
                     engineParameters.sampleRate(), cutoff, kFilterQ);
@@ -150,10 +158,10 @@ void ColorFilterEffect::processChannel(
     }
 
     if (targetHighPassActive) {
-        const double cutoff = highPassCutoff(targetColor);
+        const double cutoff = digitalFrequency(nominalHighPass(targetColor), engineParameters.sampleRate());
         if (cutoff != pState->highPassCutoff) {
             pState->highPassFilter->setFrequencyCorners(
-                    engineParameters.sampleRate(), cutoff, kFilterQ);
+                    engineParameters.sampleRate(), cutoff, highPassQ(targetColor));
             pState->highPassCutoff = cutoff;
         }
         pState->highPassFilter->process(pInput,
@@ -166,9 +174,9 @@ void ColorFilterEffect::processChannel(
     }
 
     RampingValue<CSAMPLE_GAIN> colorRamp(
-            pState->previousColor, targetColor, engineParameters.samplesPerBuffer());
+            pState->previousColor, targetColor, engineParameters.framesPerBuffer());
     for (SINT i = 0; i < engineParameters.samplesPerBuffer(); ++i) {
-        const CSAMPLE_GAIN color = colorRamp.getNth(i);
+        const CSAMPLE_GAIN color = colorRamp.getNth(i / mixxx::kEngineChannelCount);
         const CSAMPLE_GAIN lowGain = lowPassGain(color);
         const CSAMPLE_GAIN highGain = highPassGain(color);
         const CSAMPLE_GAIN dryGain = std::max<CSAMPLE_GAIN>(

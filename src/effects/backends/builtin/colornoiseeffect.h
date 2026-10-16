@@ -8,23 +8,21 @@
 #include "util/samplebuffer.h"
 #include "util/types.h"
 
-class EngineFilterBiquad1Low;
-class EngineFilterBiquad1High;
+class EngineFilterBiquad1Band;
 
 class ColorNoiseGroupState final : public EffectState {
   public:
     explicit ColorNoiseGroupState(const mixxx::EngineParameters& engineParameters);
     ~ColorNoiseGroupState() override;
 
-    CSAMPLE_GAIN previousColor;
-    double lowPassCutoff;
-    double highPassCutoff;
+    CSAMPLE_GAIN previousGain;
+    CSAMPLE_GAIN previousToneGain;
+    double bandPassCutoff;
+    double bandPassQ;
     mixxx::SampleBuffer noiseBuffer;
-    mixxx::SampleBuffer lowPassBuffer;
-    mixxx::SampleBuffer highPassBuffer;
+    mixxx::SampleBuffer bandPassBuffer;
     std::mt19937 generator;
-    std::unique_ptr<EngineFilterBiquad1Low> lowPassFilter;
-    std::unique_ptr<EngineFilterBiquad1High> highPassFilter;
+    std::unique_ptr<EngineFilterBiquad1Band> bandPassFilter;
 };
 
 class ColorNoiseEffect : public EffectProcessorImpl<ColorNoiseGroupState> {
