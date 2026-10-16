@@ -241,7 +241,7 @@ TEST(ColorFxEffectTest, NoiseAllCodesMatchNativeGainOracle) {
     }
 }
 
-TEST(ColorFxEffectTest, NoiseBandPassResponseAndToneMatchReference) {
+TEST(ColorFxEffectTest, NoiseBandPassCoefficientsAndFeedbackMatchReference) {
     struct Fixture { int code; double hz; double q; double tone; };
     const Fixture fixtures[] = {
         {0, 133.33333333333334, 2, 0.8},
@@ -257,16 +257,17 @@ TEST(ColorFxEffectTest, NoiseBandPassResponseAndToneMatchReference) {
         EXPECT_NEAR(harness.state().bandPassCutoff, f.hz, 1e-6) << f.code;
         // Q at the last code is independently checked below from the snapshot.
         if (f.code != 255) EXPECT_NEAR(harness.state().bandPassQ, f.q, 1e-10);
-        EXPECT_NEAR(harness.state().previousToneGain, f.tone, 3e-6) << f.code;
+        EXPECT_NEAR(harness.state().previousFeedback, f.tone, 3e-6) << f.code;
         const double q = harness.state().bandPassQ;
         const double t = std::tan(kPi*f.hz/44100.0);
         const double den = 1+t/q+t*t;
         const double b = (t/q)/den, a1 = 2*(t*t-1)/den, a2=(1-t/q+t*t)/den;
-        harness.state().bandPassFilter->pauseFilter();
-        harness.state().bandPassFilter->assumeSettled();
+        harness.state().filterState = {};
         harness.input()[0] = 1;
         mixxx::SampleBuffer output(harness.samplesPerBuffer());
-        harness.state().bandPassFilter->process(harness.input(), output.data(), harness.samplesPerBuffer());
+        for (SINT i = 0; i < harness.samplesPerBuffer(); ++i) {
+            output[i] = harness.state().processBandPass(harness.input()[i], i % 2, 0);
+        }
         double y1=0, y2=0;
         for (SINT i=0; i<harness.samplesPerBuffer(); i+=2) {
             const int frame=i/2;
@@ -274,6 +275,28 @@ TEST(ColorFxEffectTest, NoiseBandPassResponseAndToneMatchReference) {
             y2=y1; y1=y;
             EXPECT_NEAR(output[i], y, 2e-7) << f.code << ":" << frame;
             ASSERT_EQ(output[i+1], 0);
+        }
+    }
+}
+
+// Original RKB 7.2.19 machine-code kernel, not a second copy of our recurrence.
+// Exact EXE hash, audited instructions and oracle are in rkb-noise-level-20261017.
+TEST(ColorFxEffectTest, NoiseFeedbackMatchesOriginalRkbKernel) {
+    struct Fixture { double hz; double q; float feedback; std::array<float, 32> impulse; };
+    const Fixture fixtures[] = {
+        {133.33333333333334, 2, 0.79999996f, {0.004726463929f, 0.009424421936f, 0.009383756667f, 0.009357715026f, 0.009328306653f, 0.009295615368f, 0.009259658866f, 0.009220458567f, 0.009178032167f, 0.009132402018f, 0.009083589539f, 0.009031618014f, 0.008976512589f, 0.00891829934f, 0.008857005276f, 0.008792657405f, 0.00872528553f, 0.008654920384f, 0.008581589907f, 0.008505327627f, 0.008426164277f, 0.008344133385f, 0.008259271272f, 0.008171612397f, 0.008081194945f, 0.007988058031f, 0.007892237045f, 0.007793772034f, 0.007692703046f, 0.007589071989f, 0.007482920773f, 0.007374291308f}},
+        {1665.4797108601344, 2, 0.700000786f, {0.05550558865f, 0.1040679961f, 0.09026870877f, 0.07457383722f, 0.05552793294f, 0.03430729359f, 0.01206189767f, -0.01004130207f, -0.03088240698f, -0.04944379255f, -0.06485842168f, -0.07644884288f, -0.08375521749f, -0.08655134588f, -0.08484822512f, -0.07888542116f, -0.06911111623f, -0.05615220219f, -0.04077632725f, -0.02384803817f, -0.006281502545f, 0.01100770663f, 0.02714923769f, 0.04136072099f, 0.05298458785f, 0.06151726842f, 0.06662962586f, 0.06817774475f, 0.06620398164f, 0.06092844903f, 0.05273180827f, 0.04213041812f}},
+        {1665.4797108601344, 2, 0.700001028f, {0.05550558865f, 0.1040680036f, 0.09026873857f, 0.07457388937f, 0.0555280149f, 0.0343073979f, 0.01206201687f, -0.01004117541f, -0.03088228032f, -0.04944367334f, -0.06485830992f, -0.07644873857f, -0.08375512064f, -0.08655125648f, -0.08484815061f, -0.07888536155f, -0.06911107898f, -0.05615217984f, -0.04077631608f, -0.02384803444f, -0.006281502545f, 0.01100770291f, 0.0271492321f, 0.04136071354f, 0.05298457667f, 0.06151726842f, 0.06662963331f, 0.06817775965f, 0.06620399654f, 0.06092846766f, 0.0527318269f, 0.0421304293f}},
+        {19845, 1.000001046638987, 0.79999996f, {0.1338304132f, -0.2061641663f, 0.08575379103f, 0.004550918937f, -0.04773866385f, 0.06102686375f, -0.05953751132f, 0.05213557929f, -0.04324639216f, 0.03481397033f, -0.02754134685f, 0.02156163007f, -0.01677316241f, 0.01299712807f, -0.01004675962f, 0.007754416205f, -0.005979479291f, 0.004608104005f, -0.003549944144f, 0.002734140959f, -0.002105512423f, 0.001621270785f, -0.001248328248f, 0.000961140031f, -0.0007400055183f, 0.000569740776f, -0.0004386476357f, 0.0003377162211f, -0.0002600079752f, 0.0002001799003f, -0.0001541181118f, 0.0001186551235f}},
+    };
+    const mixxx::EngineParameters engine(mixxx::audio::SampleRate(44100), 16);
+    for (const auto& f : fixtures) {
+        ColorNoiseGroupState state(engine);
+        state.setBandPass(f.hz, f.q, 44100);
+        for (int frame = 0; frame < 32; ++frame) {
+            EXPECT_NEAR(state.processBandPass(frame == 0 ? 1.0f : 0.0f, 0, f.feedback),
+                    f.impulse[frame], 2e-6) << f.hz << " " << frame;
+            EXPECT_EQ(state.processBandPass(0, 1, f.feedback), 0);
         }
     }
 }

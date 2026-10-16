@@ -1,14 +1,11 @@
 #pragma once
 
-#include <memory>
+#include <array>
 #include <random>
 
 #include "effects/backends/effectprocessor.h"
 #include "util/class.h"
-#include "util/samplebuffer.h"
 #include "util/types.h"
-
-class EngineFilterBiquad1Band;
 
 class ColorNoiseGroupState final : public EffectState {
   public:
@@ -16,13 +13,23 @@ class ColorNoiseGroupState final : public EffectState {
     ~ColorNoiseGroupState() override;
 
     CSAMPLE_GAIN previousGain;
-    CSAMPLE_GAIN previousToneGain;
+    CSAMPLE_GAIN previousFeedback;
     double bandPassCutoff;
     double bandPassQ;
-    mixxx::SampleBuffer noiseBuffer;
-    mixxx::SampleBuffer bandPassBuffer;
     std::mt19937 generator;
-    std::unique_ptr<EngineFilterBiquad1Band> bandPassFilter;
+
+    void setBandPass(double frequency, double q, double sampleRate);
+    CSAMPLE processBandPass(CSAMPLE input, int channel, CSAMPLE_GAIN feedback);
+    struct FilterState {
+        CSAMPLE input1 = 0;
+        CSAMPLE input2 = 0;
+        CSAMPLE output1 = 0;
+        CSAMPLE output2 = 0;
+    };
+    std::array<FilterState, mixxx::kEngineChannelCount> filterState{};
+    CSAMPLE b0 = 0;
+    CSAMPLE a1 = 0;
+    CSAMPLE a2 = 0;
 };
 
 class ColorNoiseEffect : public EffectProcessorImpl<ColorNoiseGroupState> {

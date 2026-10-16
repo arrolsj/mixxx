@@ -5,7 +5,6 @@
 
 #include "effects/backends/effectmanifest.h"
 #include "engine/effects/engineeffectparameter.h"
-#include "engine/filters/enginefilterbiquad1.h"
 #include "util/rampingvalue.h"
 #include "util/sample.h"
 
@@ -44,7 +43,7 @@ float colorGain(int code) {
             eighthPower(std::fma(-0.004000000189989805f, float(code - 180), 1.0f));
 }
 
-float toneGain(int code) {
+float filterFeedback(int code) {
     const float distance = code < 124 ? 123 - code : (code >= 132 ? code - 132 : 0);
     const float shaped = (2.0f * 3.3049109333660454e-5f * distance) * distance;
     return std::min(1.0f, std::fma(0.1f, eighthPower(shaped), 0.7f));
@@ -67,17 +66,39 @@ ColorNoiseGroupState::ColorNoiseGroupState(
         const mixxx::EngineParameters& engineParameters)
         : EffectState(engineParameters),
           previousGain(0.0f),
-          previousToneGain(0.7f),
+          previousFeedback(0.7f),
           bandPassCutoff(100.0 * 2.0 / 1.5),
           bandPassQ(2.0),
-          noiseBuffer(engineParameters.samplesPerBuffer()),
-          bandPassBuffer(engineParameters.samplesPerBuffer()),
-          generator(std::random_device{}()),
-          bandPassFilter(std::make_unique<EngineFilterBiquad1Band>(
-                  engineParameters.sampleRate(), bandPassCutoff, bandPassQ)) {
+          generator(std::random_device{}()) {
+    setBandPass(bandPassCutoff, bandPassQ, engineParameters.sampleRate());
 }
 
 ColorNoiseGroupState::~ColorNoiseGroupState() = default;
+
+void ColorNoiseGroupState::setBandPass(double frequency, double q, double sampleRate) {
+    const double t = std::tan(3.14159265358979323846 * frequency / sampleRate);
+    const double denominator = 1 + t / q + t * t;
+    b0 = (t / q) / denominator;
+    a1 = 2 * (t * t - 1) / denominator;
+    a2 = (1 - t / q + t * t) / denominator;
+    bandPassCutoff = frequency;
+    bandPassQ = q;
+}
+
+CSAMPLE ColorNoiseGroupState::processBandPass(
+        CSAMPLE input, int channel, CSAMPLE_GAIN feedback) {
+    auto& state = filterState[channel];
+    // RKB IirBpf2ndOrder feeds the previous output back into the INPUT.
+    // Its +0x68 field is feedback, not an output volume multiplier.
+    input = std::fma(feedback, state.output1, input);
+    const CSAMPLE output = b0 * input - b0 * state.input2 -
+            a1 * state.output1 - a2 * state.output2;
+    state.input2 = state.input1;
+    state.input1 = input;
+    state.output2 = state.output1;
+    state.output1 = output;
+    return output;
+}
 
 QString ColorNoiseEffect::getId() {
     return QStringLiteral("org.mixxx.effects.colornoise");
@@ -133,36 +154,31 @@ void ColorNoiseEffect::processChannel(
     // Unlike FILTER, NOISE truncates the normalized control to a byte.
     const int code = static_cast<int>(targetColor * 255.0);
     const CSAMPLE_GAIN targetGain = std::clamp(colorGain(code) * kDefaultParamGain * kNoiseLevel, 0.0f, 1.0f);
-    const CSAMPLE_GAIN targetToneGain = toneGain(code);
+    const CSAMPLE_GAIN targetFeedback = filterFeedback(code);
     const SINT samples = engineParameters.samplesPerBuffer();
     if (targetGain == 0.0f && pState->previousGain == 0.0f) {
         SampleUtil::copy(pOutput, pInput, samples);
-        pState->bandPassFilter->pauseFilter();
-        pState->previousToneGain = targetToneGain;
+        pState->filterState = {};
+        pState->previousFeedback = targetFeedback;
         return;
     }
 
     const double q = filterQ(code);
     const double frequency = filterFrequency(code, q, engineParameters.sampleRate());
     if (frequency != pState->bandPassCutoff || q != pState->bandPassQ) {
-        pState->bandPassFilter->setFrequencyCorners(engineParameters.sampleRate(), frequency, q);
-        pState->bandPassCutoff = frequency;
-        pState->bandPassQ = q;
+        pState->setBandPass(frequency, q, engineParameters.sampleRate());
     }
     RampingValue<CSAMPLE_GAIN> gainRamp(pState->previousGain, targetGain,
             engineParameters.framesPerBuffer());
-    RampingValue<CSAMPLE_GAIN> toneRamp(pState->previousToneGain, targetToneGain,
+    RampingValue<CSAMPLE_GAIN> feedbackRamp(pState->previousFeedback, targetFeedback,
             engineParameters.framesPerBuffer());
     std::uniform_real_distribution<CSAMPLE> noiseDistribution(-1.0f, 1.0f);
     for (SINT i = 0; i < samples; ++i) {
-        pState->noiseBuffer[i] = noiseDistribution(pState->generator) *
-                gainRamp.getNth(i / mixxx::kEngineChannelCount);
-    }
-    pState->bandPassFilter->process(pState->noiseBuffer.data(), pState->bandPassBuffer.data(), samples);
-    for (SINT i = 0; i < samples; ++i) {
-        pOutput[i] = pInput[i] + pState->bandPassBuffer[i] *
-                toneRamp.getNth(i / mixxx::kEngineChannelCount);
+        const auto frame = i / mixxx::kEngineChannelCount;
+        const CSAMPLE noise = noiseDistribution(pState->generator) * gainRamp.getNth(frame);
+        pOutput[i] = pInput[i] + pState->processBandPass(noise,
+                i % mixxx::kEngineChannelCount, feedbackRamp.getNth(frame));
     }
     pState->previousGain = targetGain;
-    pState->previousToneGain = targetToneGain;
+    pState->previousFeedback = targetFeedback;
 }
