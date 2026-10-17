@@ -48,6 +48,8 @@ AnalyzerQueenMaryBeats::~AnalyzerQueenMaryBeats() {
 
 bool AnalyzerQueenMaryBeats::initialize(mixxx::audio::SampleRate sampleRate) {
     m_detectionResults.clear();
+    m_resultBeats.clear();
+    m_phaseRefiner.reset(sampleRate.value());
     m_sampleRate = sampleRate;
     m_stepSizeFrames = static_cast<int>(m_sampleRate * kStepSecs);
     m_windowSize = MathUtilities::nextPowerOfTwo(m_sampleRate / kMaximumBinSizeHz);
@@ -71,6 +73,7 @@ bool AnalyzerQueenMaryBeats::processSamples(const CSAMPLE* pIn, SINT iLen) {
         return false;
     }
 
+    m_phaseRefiner.process(pIn, static_cast<std::size_t>(iLen));
     return m_helper.processStereoSamples(pIn, iLen);
 }
 

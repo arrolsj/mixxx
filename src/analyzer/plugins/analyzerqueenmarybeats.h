@@ -6,6 +6,7 @@
 
 #include "analyzer/plugins/analyzerplugin.h"
 #include "analyzer/plugins/buffering_utils.h"
+#include "analyzer/plugins/beatphaserefiner.h"
 
 class DetectionFunction;
 
@@ -42,6 +43,10 @@ class AnalyzerQueenMaryBeats : public AnalyzerBeatsPlugin {
         return m_resultBeats;
     }
 
+    double phaseCorrection(double firstBeatFrames, double beatLengthFrames) const {
+        return m_phaseRefiner.correction(firstBeatFrames, beatLengthFrames);
+    }
+
   private:
     std::unique_ptr<DetectionFunction> m_pDetectionFunction;
     DownmixAndOverlapHelper m_helper;
@@ -49,6 +54,7 @@ class AnalyzerQueenMaryBeats : public AnalyzerBeatsPlugin {
     int m_windowSize;
     int m_stepSizeFrames;
     std::vector<double> m_detectionResults;
+    BeatPhaseRefiner m_phaseRefiner;
     QVector<mixxx::audio::FramePos> m_resultBeats;
 };
 

@@ -231,6 +231,22 @@ void AnalyzerBeats::storeResults(TrackPointer pTrack) {
                 extraVersionInfo,
                 m_bPreferencesFixedTempo,
                 m_sampleRate);
+        if (pBeats && m_bPreferencesFixedTempo &&
+                m_pluginId == mixxx::AnalyzerQueenMaryBeats::pluginInfo().id()) {
+            const auto bpm = pBeats->getBpmInRange(mixxx::audio::kStartFramePos,
+                    mixxx::audio::FramePos{pTrack->getDuration() * m_sampleRate});
+            if (bpm.isValid()) {
+                const auto* queenMary = static_cast<const mixxx::AnalyzerQueenMaryBeats*>(m_pPlugin.get());
+                const double shift = queenMary->phaseCorrection(
+                        pBeats->firstBeat().value(), 60.0 * m_sampleRate / bpm.value());
+                if (shift != 0) {
+                    const auto refined = pBeats->tryTranslate(shift);
+                    if (refined) {
+                        pBeats = *refined;
+                    }
+                }
+            }
+        }
         qDebug() << "AnalyzerBeats plugin detected" << beats.size()
                  << "beats. Predominant BPM:"
                  << (pBeats ? pBeats->getBpmInRange(
@@ -253,6 +269,9 @@ QHash<QString, QString> AnalyzerBeats::getExtraVersionInfo(
         const QString& pluginId, bool bPreferencesFastAnalysis) {
     QHash<QString, QString> extraVersionInfo;
     extraVersionInfo["vamp_plugin_id"] = pluginId;
+    if (pluginId == mixxx::AnalyzerQueenMaryBeats::pluginInfo().id()) {
+        extraVersionInfo["phase_refinement"] = "1";
+    }
     if (bPreferencesFastAnalysis) {
         extraVersionInfo["fast_analysis"] = "1";
     }

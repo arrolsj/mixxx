@@ -6,6 +6,9 @@
 #include <memory>
 
 #include "audio/types.h"
+#include "analyzer/plugins/beatphaserefiner.h"
+#include "analyzer/plugins/analyzerqueenmarybeats.h"
+#include "track/beatfactory.h"
 #include "track/beats.h"
 #include "track/beatutils.h"
 #include "track/bpm.h"
@@ -13,6 +16,89 @@
 using namespace mixxx;
 
 namespace {
+
+TEST(BeatPhaseRefinerTest, CorrectsPhaseWithoutChangingTempoAndIsChunkIndependent) {
+    for (const int rate : {44100, 48000, 96000}) {
+        std::vector<float> audio(rate * 10 * 2, 0);
+        const double first = rate * 0.103;
+        const double period = rate * 0.5;
+        for (int i = 0; i < 20; ++i) {
+            const int frame = int(std::lround(first + i * period));
+            // Opposite channels must not cancel in the phase evidence.
+            audio[frame * 2] = 1;
+            audio[frame * 2 + 1] = -1;
+        }
+        BeatPhaseRefiner whole;
+        BeatPhaseRefiner chunked;
+        whole.reset(rate);
+        chunked.reset(rate);
+        whole.process(audio.data(), audio.size());
+        for (std::size_t i = 0; i < audio.size(); i += 514) {
+            chunked.process(audio.data() + i, std::min(std::size_t(514), audio.size() - i));
+        }
+        for (double offset : {-0.020, -0.010, 0.010, 0.020}) {
+            const double anchor = first + rate * offset;
+            const double correction = whole.correction(anchor, period);
+            EXPECT_NEAR(correction / rate, -offset, 0.0011);
+            EXPECT_DOUBLE_EQ(correction, chunked.correction(anchor, period));
+            const auto original = Beats::fromConstTempo(audio::SampleRate(rate),
+                    audio::FramePos(anchor), Bpm(120));
+            const auto translated = original->tryTranslate(correction);
+            ASSERT_TRUE(translated);
+            EXPECT_DOUBLE_EQ((*translated)->getBpmInRange(audio::kStartFramePos,
+                                      audio::FramePos(rate * 10)).value(),
+                    120.0);
+        }
+    }
+}
+
+TEST(BeatPhaseRefinerTest, AbstainsForSilenceSparseEvidenceAndConflictingOffsets) {
+    constexpr int rate = 48000;
+    std::vector<float> audio(rate * 10 * 2, 0);
+    BeatPhaseRefiner refiner;
+    refiner.reset(rate);
+    refiner.process(audio.data(), audio.size());
+    EXPECT_DOUBLE_EQ(refiner.correction(0.1 * rate, rate * 0.5), 0);
+    for (int count : {5, 20}) {
+        std::fill(audio.begin(), audio.end(), 0);
+        for (int i = 0; i < count; ++i) {
+            const int frame = int(rate * (0.1 + i * 0.5 + (i % 2 ? 0.020 : -0.020)));
+            audio[frame * 2] = audio[frame * 2 + 1] = 1;
+        }
+        refiner.reset(rate);
+        refiner.process(audio.data(), audio.size());
+        EXPECT_DOUBLE_EQ(refiner.correction(0.1 * rate, rate * 0.5), 0);
+    }
+    EXPECT_DOUBLE_EQ(refiner.correction(0, 0), 0);
+    EXPECT_DOUBLE_EQ(refiner.correction(std::numeric_limits<double>::quiet_NaN(), rate), 0);
+}
+
+TEST(BeatPhaseRefinerTest, QueenMaryAndFittedGridAlignKnownTransients) {
+    for (int rate : {44100, 48000}) {
+        std::vector<float> samples(rate * 16 * 2, 0);
+        const double phase = 0.103;
+        for (int i = 0; i < 32; ++i) {
+            const int frame = int(std::lround((phase + i * 0.5) * rate));
+            samples[frame * 2] = samples[frame * 2 + 1] = 1;
+        }
+        AnalyzerQueenMaryBeats analyzer;
+        ASSERT_TRUE(analyzer.initialize(audio::SampleRate(rate)));
+        ASSERT_TRUE(analyzer.processSamples(samples.data(), samples.size()));
+        ASSERT_TRUE(analyzer.finalize());
+        const auto grid = BeatFactory::makePreferredBeats(
+                analyzer.getBeats(), {}, true, audio::SampleRate(rate));
+        ASSERT_TRUE(grid);
+        const auto bpm = grid->getBpmInRange(audio::kStartFramePos, audio::FramePos(rate * 16));
+        ASSERT_NEAR(bpm.value(), 120, 0.01);
+        const double shift = analyzer.phaseCorrection(grid->firstBeat().value(),
+                60.0 * rate / bpm.value());
+        const auto refined = grid->tryTranslate(shift);
+        ASSERT_TRUE(refined);
+        EXPECT_NEAR(std::remainder((*refined)->firstBeat().value() / rate - phase, 0.5), 0, .0011);
+        EXPECT_DOUBLE_EQ((*refined)->getBpmInRange(audio::kStartFramePos,
+                                  audio::FramePos(rate * 16)).value(), bpm.value());
+    }
+}
 
 constexpr auto kBpm = Bpm(120.0);
 constexpr auto kSampleRate = audio::SampleRate(48000);
